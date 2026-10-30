@@ -2,11 +2,18 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { TrendingUp, Settings, Sparkles } from "lucide-react";
+import { usePathname } from "next/navigation";
+import { TrendingUp, Settings, Sparkles, BarChart3, Layers } from "lucide-react";
 import { SettingsModal } from "@/components/settings";
 import { useAuth } from "@/hooks";
 
+const navItems = [
+  { href: "/backtest", label: "백테스트", icon: BarChart3 },
+  { href: "/backtest/factor", label: "모멘텀 팩터", icon: Layers },
+];
+
 export function Header() {
+  const pathname = usePathname();
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const { status } = useAuth();
   const strategyBuilderUrl = process.env.NEXT_PUBLIC_STRATEGY_BUILDER_URL || "http://localhost:3000/builder";
@@ -42,6 +49,29 @@ export function Header() {
                 </p>
               </div>
             </Link>
+
+            {/* 이 앱의 화면 메뉴 */}
+            <nav className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1" aria-label="메인 네비게이션">
+              {navItems.map((item) => {
+                const isActive = pathname === item.href;
+                const Icon = item.icon;
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    aria-current={isActive ? "page" : undefined}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      isActive
+                        ? "bg-blue-50 text-[#245bee] dark:bg-blue-900/20"
+                        : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                    }`}
+                  >
+                    <Icon className="w-4 h-4" aria-hidden="true" />
+                    <span className="hidden sm:inline">{item.label}</span>
+                  </Link>
+                );
+              })}
+            </nav>
 
             <div className="ml-auto flex items-center gap-4">
             {/* 다른 앱으로 이동 */}

@@ -1,8 +1,9 @@
-# 🔧 이 포크에서 확장한 내용 (zhanggu9)
+# LIMSON — 전략 빌더 · LEAN 백테스트 플랫폼
 
 > [한국투자증권 공식 open-trading-api](https://github.com/koreainvestment/open-trading-api)의 **전략 빌더 + LEAN 백테스터**를 기반으로,
-> 자체 수집한 OHLCV DB로 백테스트하고 저사양 클라우드 서버 한 대에서 웹 서비스하도록 확장했습니다.
-> 공식 저장소 대비 **35개 커밋, 39개 파일, +2,400줄**을 추가했습니다. 아래 원본 README는 한국투자증권이 작성한 내용입니다.
+> 자체 수집한 OHLCV DB로 백테스트하고 저사양 클라우드 서버 한 대에서 웹 서비스하도록 확장한 프로젝트입니다.
+> 원본 저장소 대비 **35개 커밋, 39개 파일, +2,400줄**을 추가했으며, 원본의 커밋 이력을 그대로 보존했습니다.
+> 아래 「원본 README」는 한국투자증권이 작성한 내용입니다.
 
 ![Python](https://img.shields.io/badge/Python-FastAPI-009688?logo=fastapi&logoColor=white)
 ![Next.js](https://img.shields.io/badge/Next.js-frontend-000000?logo=nextdotjs&logoColor=white)
@@ -37,6 +38,8 @@ flowchart LR
 배포 상세는 [deploy/README.md](deploy/README.md)를 참고하세요.
 
 ---
+
+# 원본 README (한국투자증권)
 
 **[LLM Repository Guide]**
 

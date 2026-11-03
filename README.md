@@ -1,3 +1,43 @@
+# 🔧 이 포크에서 확장한 내용 (zhanggu9)
+
+> [한국투자증권 공식 open-trading-api](https://github.com/koreainvestment/open-trading-api)의 **전략 빌더 + LEAN 백테스터**를 기반으로,
+> 자체 수집한 OHLCV DB로 백테스트하고 저사양 클라우드 서버 한 대에서 웹 서비스하도록 확장했습니다.
+> 공식 저장소 대비 **35개 커밋, 39개 파일, +2,400줄**을 추가했습니다. 아래 원본 README는 한국투자증권이 작성한 내용입니다.
+
+![Python](https://img.shields.io/badge/Python-FastAPI-009688?logo=fastapi&logoColor=white)
+![Next.js](https://img.shields.io/badge/Next.js-frontend-000000?logo=nextdotjs&logoColor=white)
+![LEAN](https://img.shields.io/badge/QuantConnect-LEAN-F5AE29)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-OHLCV-4169E1?logo=postgresql&logoColor=white)
+![AWS](https://img.shields.io/badge/AWS-EC2%20%2B%20nginx%20%2B%20systemd-232F3E?logo=amazonwebservices&logoColor=white)
+
+## 추가한 기능
+
+| 영역 | 내용 | 주요 파일 |
+| --- | --- | --- |
+| **데이터 소스** | 백테스트 OHLCV를 KIS API 대신 자체 수집 PostgreSQL에서 읽는 데이터 공급자 추가. 테이블·컬럼명은 환경변수로 설정하고, 식별자 검증으로 SQL 인젝션을 막았습니다. 단독 실행 스모크 테스트 포함 | `backtester/kis_backtest/providers/postgres/` |
+| **백테스트 신뢰성** | 단계별 실행 시간 로깅, 벤치마크 페이지네이션·커버리지 로그, **불완전한 벤치마크 곡선은 결과에서 제외**, KRX 종목 속성 중복 제거 | `backtester/backend/routes/backtest.py` |
+| **통합 실행기** | 전략 빌더·백테스터(백엔드 2 + 프론트엔드 2)를 한 번에 띄우고, HTTP 헬스체크로 준비 상태를 확인하며, 시그널을 받으면 안전하게 종료하는 루트 `start.sh` | `start.sh` |
+| **배포** | EC2 한 대에 **nginx 단일 포트(Basic 인증) + systemd 4개 서비스**로 배포하는 스크립트. PostgreSQL 자동 탐지, 디스크 여유를 보고 LEAN 이미지 다운로드 여부 결정, 스왑 자동 생성 | `deploy/` |
+| **하이브리드 실행** | t3.micro(1GB RAM)에서 42GB짜리 LEAN을 돌릴 수 없어서, **웹은 EC2, 백테스트는 로컬 PC**에서 실행하고 SSH 역터널로 연결. 끊기면 5초마다 자동 재접속 | `deploy/local_backtest_worker.sh` |
+
+## 아키텍처
+
+```mermaid
+flowchart LR
+    U["브라우저"] --> N["EC2 nginx :8011<br/>Basic 인증"]
+    N -->|"/"| SB["전략 빌더<br/>Next.js + FastAPI"]
+    N -->|"/backtest"| BF["백테스트 화면<br/>Next.js"]
+    N -->|"/backtest/api"| T["127.0.0.1:8002"]
+    T ==>|"SSH 역터널"| W["로컬 PC 워커<br/>백테스트 API"]
+    W --> L["Docker LEAN 엔진"]
+    W ==>|"SSH 터널"| PG[("EC2 PostgreSQL<br/>OHLCV")]
+    SB --> KIS["KIS Open API<br/>모의투자"]
+```
+
+배포 상세는 [deploy/README.md](deploy/README.md)를 참고하세요.
+
+---
+
 **[LLM Repository Guide]**
 
 ChatGPT, Claude 등 LLM(Large Language Model)과 AI 에이전트가 이 저장소를 보다 쉽게 탐색할 수 있도록 `llms.txt`를 제공합니다.

@@ -3,7 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { TrendingUp, Sparkles, Play, Settings, BarChart3 } from "lucide-react";
+import { Sparkles, Play, Settings, BarChart3 } from "lucide-react";
+import { LimsonMark } from "./LimsonMark";
 import { useAuth } from "@/hooks";
 import { SettingsModal } from "@/components/settings";
 
@@ -30,9 +31,7 @@ export function Navigation() {
           <div className="flex items-center justify-between h-16">
             {/* 로고 */}
             <Link href="/" className="flex items-center gap-3 focus-ring rounded-lg" aria-label="LIMSON Strategy Builder 홈">
-              <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center">
-                <TrendingUp className="w-6 h-6 text-white" aria-hidden="true" />
-              </div>
+              <LimsonMark className="w-10 h-10 shrink-0" />
               <div className="hidden sm:block">
                 <h1 className="font-bold text-lg text-slate-900 dark:text-slate-100">
                   LIMSON Strategy Builder

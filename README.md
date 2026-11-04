@@ -2,8 +2,6 @@
 
 > [한국투자증권 공식 open-trading-api](https://github.com/koreainvestment/open-trading-api)의 **전략 빌더 + LEAN 백테스터**를 기반으로,
 > 자체 수집한 OHLCV DB로 백테스트하고 저사양 클라우드 서버 한 대에서 웹 서비스하도록 확장한 프로젝트입니다.
-> 원본 저장소 대비 **35개 커밋, 39개 파일, +2,400줄**을 추가했으며, 원본의 커밋 이력을 그대로 보존했습니다.
-> 아래 「원본 README」는 한국투자증권이 작성한 내용입니다.
 
 ![Python](https://img.shields.io/badge/Python-FastAPI-009688?logo=fastapi&logoColor=white)
 ![Next.js](https://img.shields.io/badge/Next.js-frontend-000000?logo=nextdotjs&logoColor=white)
@@ -39,18 +37,12 @@ flowchart LR
 
 ---
 
-# 원본 README (한국투자증권)
 
 **[LLM Repository Guide]**
 
 ChatGPT, Claude 등 LLM(Large Language Model)과 AI 에이전트가 이 저장소를 보다 쉽게 탐색할 수 있도록 `llms.txt`를 제공합니다.
 - [`llms.txt`](./llms.txt)
 
-**[당사에서 제공하는 샘플코드에 대한 유의사항]**
-
-- 샘플 코드는 한국투자증권 Open API(KIS Developers)를 연동하는 예시입니다. 고객님의 개발 부담을 줄이고자 참고용으로 제공되고 있습니다.
-- 샘플 코드는 별도의 공지 없이 지속적으로 업데이트될 수 있습니다.
-- 샘플 코드를 활용하여 제작한 고객님의 프로그램으로 인한 손해에 대해서는 당사에서 책임지지 않습니다.
 
 # KIS Open API 샘플 코드 저장소 (LLM 지원)
 

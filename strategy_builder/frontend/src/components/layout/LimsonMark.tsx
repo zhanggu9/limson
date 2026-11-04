@@ -5,16 +5,16 @@ export function LimsonMark({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 100 100" className={className} role="img" aria-label="LIMSON">
       <rect width="100" height="100" rx="19" fill="#121d33" />
-      <path d="M29 22 V75.5 H79.5" fill="none" stroke="#ffffff" strokeWidth="9.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M29 22 V75.5 H79.5" fill="none" stroke="#ffffff" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round" />
       <polyline
-        points="41,62.7 53,48.8 61.6,55.5 74.4,36"
+        points="40.5,62.5 52.5,49.5 61,56 73.5,36.5"
         fill="none"
         stroke="#34e3a1"
-        strokeWidth="6"
+        strokeWidth="7"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
-      <circle cx="74.6" cy="35.3" r="6.2" fill="#34e3a1" />
+      <circle cx="74.5" cy="35" r="7" fill="#34e3a1" />
     </svg>
   );
 }

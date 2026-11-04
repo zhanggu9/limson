@@ -114,9 +114,14 @@ check_local_prereqs() {
     log "LEAN 데이터 준비 (setup_lean_data.sh)"
     LEAN_SKIP_PULL=1 bash "$BACKTEST_DIR/scripts/setup_lean_data.sh"
   fi
-  if (exec 3<>"/dev/tcp/127.0.0.1/$LOCAL_API_PORT") 2>/dev/null; then
+  # 이미 설치된 워커 서비스가 쓰는 포트면 다시 설치할 때 문제 삼지 않는다 (재시작으로 교체).
+  if [[ "${1:-}" != "allow_own_service" ]] && (exec 3<>"/dev/tcp/127.0.0.1/$LOCAL_API_PORT") 2>/dev/null; then
     die "로컬 127.0.0.1:$LOCAL_API_PORT 를 이미 다른 프로그램이 쓰고 있습니다 (LOCAL_API_PORT=다른포트)."
   fi
+}
+
+worker_service_active() {
+  command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null
 }
 
 run_worker() {
@@ -170,7 +175,14 @@ install_service() {
     || die "systemd 사용자 서비스를 쓸 수 없습니다. '$0 run' 을 터미널에서 직접 실행하세요."
   # 설치 전에 키·Docker·LEAN·의존성을 확인해 둔다.
   prepare_key
-  check_local_prereqs
+  local reinstall=0
+  if worker_service_active; then
+    reinstall=1
+    log "워커 서비스가 이미 실행 중입니다 → 설정을 갱신하고 재시작합니다."
+    check_local_prereqs allow_own_service
+  else
+    check_local_prereqs
+  fi
 
   local env_lines="" var
   for var in DEPLOY_HOST SSH_KEY KEY_DIR SSH_USER SSH_PORT LOCAL_API_PORT REMOTE_API_PORT LOCAL_DB_PORT; do
@@ -194,6 +206,9 @@ WantedBy=default.target
 EOF
   systemctl --user daemon-reload
   systemctl --user enable --now "$SERVICE_NAME"
+  if [[ $reinstall -eq 1 ]]; then
+    systemctl --user restart "$SERVICE_NAME"
+  fi
   # 로그인 세션이 없어도(WSL이 백그라운드로 켜졌을 때) 사용자 서비스가 돌도록 한다.
   loginctl enable-linger "$USER" 2>/dev/null || log "참고: loginctl enable-linger 실패 — WSL 터미널이 열려 있을 때만 동작할 수 있습니다."
   log "설치 완료: $UNIT_FILE"

@@ -1,6 +1,12 @@
-# Korea Investment & Securities (KIS) Open Trading API
+# LIMSON
 
-> Python examples and utilities for the KIS Open API, supporting automated trading, market data retrieval, account management, and strategy development.
+> Korean equity quant trading platform: visual strategy builder, QuantConnect LEAN backtester (daily and 1-minute bars), vectorized momentum factor analysis, and order execution through the Korea Investment & Securities Open API. Deployable to EC2 behind a single nginx port.
+
+## Apps
+
+- [Strategy Builder](strategy_builder/README.md): strategy design UI, signal engine, orders, real-time orderbook.
+- [Backtester](backtester/README.md): LEAN code generation and execution, daily/minute data preparation, vectorized factor engine (`backtester/kis_backtest/vectorized`).
+- [Deploy](deploy/README.md): EC2 deployment scripts, nginx and systemd configuration.
 
 ## Core Modules & Examples
 

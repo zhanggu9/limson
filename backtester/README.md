@@ -223,16 +223,37 @@ Strategy Builder에서 Export한 `.kis.yaml` 파일을 드래그 앤 드롭으�
 
 백테스트 화면 `기간 설정`의 **봉 단위** 버튼으로 고릅니다. API는 `/api/backtest/run`, `/api/backtest/run-custom` 요청에 `"resolution": "daily" | "minute"`(기본 `daily`)를 넣습니다.
 
-| | 일봉 (`daily`) | 분봉 (`minute`, 1분봉) |
+| | 일봉 (`daily`) | 분봉 (`minute`) |
 |---|---|---|
-| 데이터 | PostgreSQL `public.ohlcv` | KIS 주식일별분봉조회 (`FHKST03010230`) |
-| 기간 | 제한 없음 | 최근 1년 이내, 최대 92일 (`MINUTE_BACKTEST_MAX_DAYS`로 조정) |
-| 인증 | 필요 없음 | KIS **실전** 인증 필요 (실전계좌 기준 API) |
-| LEAN 입력 | `data/equity/krx/daily/{종목}.csv` | `data/equity/krx/minute/{종목}/{YYYYMMDD}.csv` |
+| 데이터 | PostgreSQL `PG_OHLCV_TABLE` (기본 `public.ohlcv`) | PostgreSQL `PG_MINUTE_TABLE` (기본 `public.ohlcv_minute_day`, pg-stock-api가 매일 수집) |
+| 기간 | 제한 없음 | DB에 있는 범위 (`GET /api/backtest/minute-coverage`) |
+| 규모 | 제한 없음 | 종목 수 × 영업일 × 하루 봉 수 ≤ `MINUTE_BACKTEST_MAX_BARS` (기본 150만 봉) |
+| 봉 주기 | 1일 | `bar_minutes`: 1·3·5·10·15·30·60분 (기본 1, 화면 기본 5) |
+| LEAN 입력 | `data/equity/krx/daily/{종목}.csv` | `data/equity/krx/minute/{N}m/{종목}/{YYYYMMDD}.csv` |
+| LEAN 제한 시간 | 600초 | `MINUTE_LEAN_TIMEOUT` (기본 840초, nginx 900초보다 짧게) |
 
-- 분봉은 종목·영업일마다 KIS API를 약 4번 호출하므로 기간·종목이 많으면 수 분 걸립니다. 오늘 이전 날짜의 분봉 파일은 캐시되어 다시 받지 않습니다.
-- 전략의 지표 기간은 봉 개수 기준입니다. 분봉에서 `SMA 20`은 20분 이동평균입니다.
+분봉 요청 예:
+
+```json
+{"strategy_id": "sma_crossover", "symbols": ["005930"], "start_date": "2026-01-02", "end_date": "2026-06-30",
+ "resolution": "minute", "bar_minutes": 5, "intraday_exit": "15:15"}
+```
+
+- **N분봉 집계**: DB의 1분봉을 09:00 기준 N분 단위로 묶습니다. 15:30 종가 단일가 봉은 따로 두고, 앞 봉의 끝 시각은 15:30을 넘지 않습니다(수능일처럼 늦게 끝나는 날도 같은 규칙). 각 봉은 끝 시각에 전략으로 전달되어 봉이 끝나기 전 값을 보지 않습니다.
+- **워밍업**: 지표 기간만큼 시작일 이전 거래일의 분봉을 함께 준비하고 `SetWarmUp`으로 미리 계산합니다. DB 첫날부터 시작하면 기간 안에서 지표가 준비됩니다.
+- **장마감 청산** (`intraday_exit`, `HH:MM`): 봉 끝 시각이 그 시각 이후면 신규 진입을 막고 보유분을 청산합니다. 당일 매매 전략 검증용입니다.
+- **경고** (`data_warnings`): 전일 종가 대비 시가가 ±35%(가격제한폭 초과) 넘게 벌어진 날을 액면분할·병합 의심으로 알려 줍니다. 분봉은 수정주가가 아니라 그 종목 수익률이 왜곡될 수 있습니다. 종료일이 DB 마지막 날 이후면 그것도 알려 줍니다.
+- **거래 시각**: 결과의 `trades[].time`은 데이터의 한국 시각(`2026-01-02T09:05:00`)입니다.
+- 전략의 지표 기간은 봉 개수 기준입니다. 5분봉에서 `SMA 20`은 100분 이동평균입니다. 일봉용 파라미터를 1분봉에 그대로 쓰면 매매가 너무 잦아 수수료·세금에 수익이 잠식되기 쉽습니다.
+- 체결은 신호가 난 봉의 종가 기준입니다 (LEAN 기본). 슬리피지 설정으로 보수적으로 볼 수 있습니다.
 - KOSPI 벤치마크는 분봉 백테스트에서도 일봉 기준입니다.
+
+실측 (이 PC, `sma_crossover`): LEAN은 커스텀 분봉을 초당 약 3,500봉 처리하고 기동에 약 5초가 걸립니다.
+
+| 범위 | 1분봉 | 5분봉 | 30분봉 |
+|---|---|---|---|
+| 5종목 × 1년 | 약 2분 | 약 35초 | 약 11초 |
+| 20종목 × 1년 | 약 7분 | 약 2분 | — |
 
 ---
 

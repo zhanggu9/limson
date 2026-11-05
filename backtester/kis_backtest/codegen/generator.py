@@ -29,6 +29,9 @@ from kis_backtest.strategies.base import BaseStrategy
 
 logger = logging.getLogger(__name__)
 
+# 분봉 백테스트에서 고를 수 있는 봉 주기 (분)
+BAR_MINUTES_CHOICES = (1, 3, 5, 10, 15, 30, 60)
+
 
 @dataclass
 class CodeGenConfig:
@@ -39,16 +42,39 @@ class CodeGenConfig:
     slippage: float = 0.0  # 슬리피지 (기본 0%)
     initial_capital: float = 100_000_000  # 1억원
     resolution: str = "daily"  # daily | minute (minute은 KRX만)
+    bar_minutes: int = 1  # 분봉 주기 (minute 전용): 1·3·5·10·15·30·60
+    warmup_days: int = 0  # 시작일 이전에 준비된 분봉 데이터의 달력 일수 (minute 전용, 0이면 워밍업 없음)
+    intraday_exit: Optional[str] = None  # "HH:MM" 이후 신규 진입 금지 + 보유분 청산 (minute 전용)
 
     def __post_init__(self) -> None:
         if self.resolution not in ("daily", "minute"):
             raise ValueError(f"지원하지 않는 해상도: {self.resolution}")
         if self.resolution == "minute" and self.market != "krx":
             raise ValueError("분봉 백테스트는 KRX(국내 주식)만 지원합니다.")
+        if self.bar_minutes not in BAR_MINUTES_CHOICES:
+            raise ValueError(f"지원하지 않는 분봉 주기: {self.bar_minutes}분")
+        if self.resolution != "minute" and (self.bar_minutes != 1 or self.intraday_exit):
+            raise ValueError("분봉 주기·장마감 청산은 분봉 백테스트에서만 쓸 수 있습니다.")
+        if self.intraday_exit is not None:
+            self.intraday_exit_minute  # 형식 검증
 
     @property
     def lean_resolution(self) -> str:
         return "Resolution.Minute" if self.resolution == "minute" else "Resolution.Daily"
+
+    @property
+    def intraday_exit_minute(self) -> Optional[int]:
+        """장마감 청산 시각 (자정 기준 분). 09:00 초과 ~ 15:30 이하만 허용."""
+        if self.intraday_exit is None:
+            return None
+        try:
+            hour, minute = (int(part) for part in self.intraday_exit.split(":"))
+        except ValueError as exc:
+            raise ValueError(f"장마감 청산 시각은 HH:MM 형식이어야 합니다: {self.intraday_exit!r}") from exc
+        total = hour * 60 + minute
+        if not (0 <= minute < 60 and 9 * 60 < total <= 15 * 60 + 30):
+            raise ValueError(f"장마감 청산 시각은 09:01 ~ 15:30 사이여야 합니다: {self.intraday_exit!r}")
+        return total
 
 
 class LeanCodeGenerator:
@@ -383,6 +409,12 @@ class LeanCodeGenerator:
         except SyntaxError as e:
             raise ValueError(f"생성된 Lean 코드 구문 오류 (line {e.lineno}): {e.msg}")
         return code
+
+    def warmup_bars(self) -> int:
+        """지표·캔들스틱이 준비되는 데 필요한 봉 수 (분봉 워밍업 데이터 범위 계산용)."""
+        _, warmup = self._generate_indicator_init()
+        _, cs_warmup = self._generate_candlestick_init()
+        return max(warmup, cs_warmup)
     
     def _generate_header(self) -> str:
         """파일 헤더 생성"""
@@ -401,7 +433,7 @@ class LeanCodeGenerator:
                 candlestick_imports = f"\nfrom QuantConnect.Indicators.CandlestickPatterns import {classes_str}"
 
         slippage_info = f"\n슬리피지: {self.config.slippage * 100:.2f}%" if self.config.slippage > 0 else ""
-        resolution_label = "1분봉" if self.config.resolution == "minute" else "일봉"
+        resolution_label = f"{self.config.bar_minutes}분봉" if self.config.resolution == "minute" else "일봉"
         header = f'''자동 생성된 Lean 알고리즘
 전략: {self.schema.name}
 ID: {self.schema.id}
@@ -430,19 +462,21 @@ from datetime import datetime, timedelta{candlestick_imports}'''
         return equity_class + self._generate_krx_index_class()
 
     def _generate_krx_minute_equity_class(self) -> str:
-        """KRX 1분봉 데이터 클래스
+        """KRX 분봉 데이터 클래스
 
-        분봉은 날짜별 파일(/Data/equity/krx/minute/{종목}/{YYYYMMDD}.csv)로 나눠 두고,
-        LEAN이 요청한 날짜의 파일만 읽게 한다. 한 줄: YYYYMMDDHHMM,open,high,low,close,volume
-        봉 시작 시각을 Time, 1분 뒤를 EndTime으로 둬서 봉이 끝난 뒤에야 전략이 보게 한다.
+        분봉은 봉 주기·날짜별 파일(/Data/equity/krx/minute/{N}m/{종목}/{YYYYMMDD}.csv)로 나눠 두고,
+        LEAN이 요청한 날짜의 파일만 읽게 한다.
+        한 줄: 시작 YYYYMMDDHHMM,open,high,low,close,volume,끝 YYYYMMDDHHMM
+        끝 시각을 EndTime으로 둬서 봉이 끝난 뒤에야 전략이 보게 한다.
         """
+        bar_minutes = self.config.bar_minutes
         return '''
 class KRXEquity(PythonData):
-    """한국 주식 1분봉 커스텀 데이터"""
+    """한국 주식 __N__분봉 커스텀 데이터"""
 
     def GetSource(self, config, date, isLive):
         symbol = config.Symbol.Value.lower()
-        source = f"/Data/equity/krx/minute/{symbol}/{date.strftime('%Y%m%d')}.csv"
+        source = f"/Data/equity/krx/minute/__N__m/{symbol}/{date.strftime('%Y%m%d')}.csv"
         return SubscriptionDataSource(source, SubscriptionTransportMedium.LocalFile, FileFormat.Csv)
 
     def Reader(self, config, line, date, isLive):
@@ -455,7 +489,7 @@ class KRXEquity(PythonData):
         try:
             cols = line.split(",")
             data.Time = datetime.strptime(cols[0], "%Y%m%d%H%M")
-            data.EndTime = data.Time + timedelta(minutes=1)
+            data.EndTime = datetime.strptime(cols[6], "%Y%m%d%H%M")
             data.Value = float(cols[4])
             data["Open"] = float(cols[1])
             data["High"] = float(cols[2])
@@ -466,7 +500,7 @@ class KRXEquity(PythonData):
             return None
 
         return data
-'''
+'''.replace("__N__", str(bar_minutes))
 
     def _generate_krx_daily_equity_class(self) -> str:
         """KRX 일봉 데이터 클래스"""
@@ -680,6 +714,31 @@ class CustomFeeModel(FeeModel):
         # 커스텀 로직 코드 생성
         custom_init, custom_logic = self._generate_custom_logic()
 
+        # 워밍업: 분봉은 시작일 이전 분봉을 실제로 준비해 둔 달력 일수만큼 거슬러 올라간다.
+        if self.config.resolution == "minute":
+            if self.config.warmup_days > 0:
+                warmup_line = (
+                    f"self.SetWarmUp(timedelta(days={int(self.config.warmup_days)}))"
+                    f"  # 시작일 이전 분봉 (지표 준비에 {warmup}봉 필요)"
+                )
+            else:
+                warmup_line = "# 시작일 이전 분봉이 없어 워밍업 없이 기간 안에서 지표를 준비한다"
+        else:
+            warmup_line = f"self.SetWarmUp({warmup}, {self.config.lean_resolution})"
+
+        # 장마감 청산: 봉 끝 시각(self.Time)이 기준 시각 이후면 신규 진입을 막고 보유분을 청산한다.
+        intraday_entry_guard = ""
+        intraday_exit_guard = ""
+        exit_minute = self.config.intraday_exit_minute
+        if exit_minute is not None:
+            label = self.config.intraday_exit
+            intraday_entry_guard = f"""
+            if self.Time.hour * 60 + self.Time.minute >= {exit_minute}:  # {label} 이후 신규 진입 금지
+                entry_signal = False"""
+            intraday_exit_guard = f"""
+            if self.Time.hour * 60 + self.Time.minute >= {exit_minute} and holdings > 0:  # {label} 장마감 청산
+                exit_signal = True"""
+
         # 벤치마크 설정 (KRX만 해당)
         benchmark_setup = ""
         if self.config.market == "krx":
@@ -721,7 +780,7 @@ class Algorithm(QCAlgorithm):
 {indicator_init}
 {candlestick_init}
 
-        self.SetWarmUp({warmup}, {self.config.lean_resolution})
+        {warmup_line}
 
         for symbol in self.symbols:
             self.Securities[symbol].SetFeeModel(CustomFeeModel()){"""
@@ -757,7 +816,7 @@ class Algorithm(QCAlgorithm):
 {custom_logic}
 
             # === 진입 조건 ===
-{entry_condition}
+{entry_condition}{intraday_entry_guard}
 
             if entry_signal and holdings == 0:
                 weight = 1.0 / len(self.symbols)
@@ -767,7 +826,7 @@ class Algorithm(QCAlgorithm):
 
             # === 청산 조건 ===
 {exit_condition}
-{risk_check}
+{risk_check}{intraday_exit_guard}
 
             if exit_signal and holdings > 0:
                 self.Liquidate(symbol, tag=f"EXIT: {{self.strategy_name}}")

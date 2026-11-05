@@ -7,6 +7,9 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
+# 분봉 주기 (kis_backtest.codegen.generator.BAR_MINUTES_CHOICES 와 같은 값)
+BarMinutes = Literal[1, 3, 5, 10, 15, 30, 60]
+
 
 class BacktestRequest(BaseModel):
     """백테스트 요청"""
@@ -33,7 +36,16 @@ class BacktestRequest(BaseModel):
     )
     resolution: Literal["daily", "minute"] = Field(
         default="daily",
-        description="봉 단위: daily(일봉, PostgreSQL) | minute(1분봉, KIS 주식일별분봉조회)"
+        description="봉 단위: daily(일봉) | minute(분봉) — 둘 다 PostgreSQL"
+    )
+    bar_minutes: BarMinutes = Field(
+        default=1,
+        description="분봉 주기(분). resolution=minute 일 때만 1이 아닌 값을 쓸 수 있다"
+    )
+    intraday_exit: Optional[str] = Field(
+        default=None,
+        pattern=r"^\d{2}:\d{2}$",
+        description="장마감 청산 시각 HH:MM (분봉 전용). 이후 신규 진입 금지 + 보유분 청산"
     )
 
     class Config:

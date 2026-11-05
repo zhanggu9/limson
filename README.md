@@ -18,7 +18,7 @@
 | **통합 실행기** | 전략 빌더·백테스터(백엔드 2 + 프론트엔드 2)를 한 번에 띄우고, HTTP 헬스체크로 준비 상태를 확인하며, 시그널을 받으면 안전하게 종료하는 루트 `start.sh` | `start.sh` |
 | **배포** | EC2 한 대에 **nginx 단일 포트(Basic 인증) + systemd 4개 서비스**로 배포하는 스크립트. PostgreSQL 자동 탐지, 디스크 여유를 보고 LEAN 이미지 다운로드 여부 결정, 스왑 자동 생성 | `deploy/` |
 | **하이브리드 실행** | t3.micro(1GB RAM)에서 42GB짜리 LEAN을 돌릴 수 없어서, **웹은 EC2, 백테스트는 로컬 PC**에서 실행하고 SSH 역터널로 연결. 끊기면 5초마다 자동 재접속 | `deploy/local_backtest_worker.sh` |
-| **분봉 백테스트** | 백테스트 화면에서 **일봉/분봉(1분)** 선택. 분봉은 KIS 주식일별분봉조회로 받아 날짜별 파일로 캐시하고 LEAN이 하루치씩 읽음 (최근 1년 · 최대 92일, 실전 인증 필요) | `backtester/backend/routes/backtest.py`, `backtester/kis_backtest/codegen/generator.py` |
+| **분봉 백테스트** | 백테스트 화면에서 **일봉/분봉** 선택. 분봉은 PostgreSQL에 매일 쌓이는 1분봉(`ohlcv_minute_day`)을 **1·3·5·10·15·30·60분봉**으로 묶어 LEAN이 하루치씩 읽음. 시작일 이전 데이터로 지표 워밍업, **장마감 청산**(당일 매매) 옵션, 액면분할 의심 경고, 규모 한도(기본 150만 봉) | `backtester/backend/routes/backtest.py`, `backtester/kis_backtest/codegen/generator.py`, `backtester/kis_backtest/providers/postgres/` |
 | **모멘텀 팩터** | 벡터화 백테스트 엔진으로 유니버스를 12-1개월 모멘텀 분위로 나눠 몇 초 만에 검증. 분위별 성과, 롱숏, Rank IC, 최신 순위 | `backtester/kis_backtest/vectorized/`, `/backtest/factor` |
 | **운영 점검** | pg-stock 테이블·분봉 보유 여부를 읽기 전용으로 확인하는 스크립트 | `deploy/check_pg_stock.sh` |
 

@@ -2,8 +2,20 @@
  * 백테스트 타입 정의 - Lean 전체 통계 반영
  */
 
-/** 봉 단위: daily = 일봉(PostgreSQL), minute = 1분봉(KIS 주식일별분봉조회) */
+/** 봉 단위: daily = 일봉, minute = 분봉 (둘 다 PostgreSQL) */
 export type BacktestResolution = "daily" | "minute";
+
+/** 분봉 주기 (분) — backtester/backend/schemas/backtest.py 의 BarMinutes 와 같은 값 */
+export type BarMinutes = 1 | 3 | 5 | 10 | 15 | 30 | 60;
+
+/** GET /api/backtest/minute-coverage */
+export interface MinuteCoverage {
+  earliest: string | null;  // DB에 있는 첫 거래일 (YYYY-MM-DD)
+  latest: string | null;    // DB에 있는 마지막 거래일
+  bar_minutes: BarMinutes[];
+  bars_per_day: Record<string, number>;  // 주기별 하루 봉 수 ("5" → 77)
+  max_bars: number;  // 백테스트 한 번의 봉 수 한도
+}
 
 export interface BacktestRequest {
   strategy_id: string;
@@ -16,6 +28,8 @@ export interface BacktestRequest {
   slippage?: number;
   param_overrides?: Record<string, number>;
   resolution?: BacktestResolution;
+  bar_minutes?: BarMinutes;      // 분봉 전용
+  intraday_exit?: string | null;  // 장마감 청산 HH:MM (분봉 전용)
 }
 
 export interface CustomBacktestRequest {
@@ -28,6 +42,8 @@ export interface CustomBacktestRequest {
   tax_rate?: number;
   slippage?: number;
   resolution?: BacktestResolution;
+  bar_minutes?: BarMinutes;      // 분봉 전용
+  intraday_exit?: string | null;  // 장마감 청산 HH:MM (분봉 전용)
 }
 
 /**
@@ -93,6 +109,9 @@ export interface BacktestResult {
   end_date: string;
   initial_capital: number;
   resolution?: BacktestResolution;
+  bar_minutes?: BarMinutes | null;
+  intraday_exit?: string | null;
+  data_warnings?: string[];  // 분할 의심·DB 미수집 구간 등
   final_capital: number;
   net_profit: number;
   net_profit_percent: number;

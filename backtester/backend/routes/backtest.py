@@ -4,25 +4,27 @@ Lean Docker 기반 백테스트 실행.
 """
 
 import logging
+import math
 import os
 from time import perf_counter
 from typing import Any, Dict, List, Literal, Optional
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
-import requests
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.schemas.backtest import (
     BacktestRequest,
     BacktestResponse,
+    BarMinutes,
 )
 from backend.state import KIS_AUTH_ERRORS
 from kis_backtest.errors import BOUNDARY_ERRORS
 from kis_backtest.exceptions import LeanError
 from kis_backtest.strategies.registry import StrategyRegistry
-from kis_backtest.codegen.generator import LeanCodeGenerator, CodeGenConfig
+from kis_backtest.codegen.generator import BAR_MINUTES_CHOICES, LeanCodeGenerator, CodeGenConfig
 from kis_backtest.lean.executor import LeanExecutor, LeanRun
 from kis_backtest.lean.project_manager import LeanProjectManager
 from kis_backtest.lean.data_converter import DataConverter
@@ -40,13 +42,31 @@ _DATA_PREP_ERRORS = (OSError, ValueError)
 # 전략 YAML 로드·파라미터 치환 실패
 _STRATEGY_LOAD_ERRORS = (OSError, ValueError, KeyError, TypeError, AttributeError)
 
-# 분봉 백테스트 기간 제한
-# - KIS 주식일별분봉조회는 최근 1년치만 보관한다.
-# - 종목·영업일마다 API를 약 4번 호출하므로 기간 상한을 둔다 (환경변수로 조정).
-MINUTE_HISTORY_DAYS = 365
-MINUTE_MAX_DAYS = int(os.getenv("MINUTE_BACKTEST_MAX_DAYS", "92"))
-# LEAN 워밍업이 시작일 이전 날짜 파일을 찾을 때 "파일 없음" 경고가 나지 않도록 빈 파일을 둘 일수
-_MINUTE_WARMUP_PAD_DAYS = 7
+# 분봉 백테스트 (PostgreSQL 분봉 테이블 PG_MINUTE_TABLE)
+# - 봉 예산: 종목 수 × 영업일 × 하루 봉 수가 이 값을 넘으면 거절한다 (환경변수로 조정).
+#   실측: LEAN이 커스텀 분봉을 초당 약 3,500봉 처리 → 150만 봉 ≈ 7분.
+MINUTE_MAX_BARS = int(os.getenv("MINUTE_BACKTEST_MAX_BARS", "1500000"))
+# 분봉 LEAN 실행 제한 시간 (nginx /backtest/api/ 타임아웃 900초보다 짧게)
+MINUTE_LEAN_TIMEOUT = int(os.getenv("MINUTE_LEAN_TIMEOUT", "840"))
+DAILY_LEAN_TIMEOUT = 600
+# 09:00~15:20 연속 매매 분 수 (종가 단일가 봉은 별도 1개)
+_CONTINUOUS_SESSION_MINUTES = 380
+
+
+# 생성 코드는 시간대를 지정하지 않아 LEAN 기본 시간대(뉴욕)로 돌고, 커스텀 데이터의 시각(한국 시각 숫자)도
+# 그 시간대로 해석된다. LEAN 결과의 UTC 시각을 뉴욕 시각으로 되돌리면 CSV에 적힌 한국 시각이 그대로 나온다.
+_LEAN_ALGORITHM_TZ = ZoneInfo("America/New_York")
+
+
+def _lean_time_to_data_clock(value: str) -> str:
+    """LEAN 주문 시각(UTC, 예: 2025-11-03T15:40:00Z) → 데이터 시각 문자열(2025-11-03T10:40:00)."""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return value
+    if parsed.tzinfo is None:
+        return value
+    return parsed.astimezone(_LEAN_ALGORITHM_TZ).strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def _load_benchmark_curve(
@@ -133,6 +153,9 @@ def _lean_run_to_api_response(
     initial_capital: float,
     workspace: Optional[Path] = None,
     resolution: str = "daily",
+    bar_minutes: int = 1,
+    intraday_exit: Optional[str] = None,
+    data_warnings: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """LeanRun을 프론트엔드 API 응답 형식으로 변환"""
     if not lean_run.success:
@@ -157,7 +180,7 @@ def _lean_run_to_api_response(
     for point in values:
         if isinstance(point, list) and len(point) >= 2:
             try:
-                dt = datetime.fromtimestamp(point[0])
+                dt = datetime.fromtimestamp(point[0], tz=_LEAN_ALGORITHM_TZ)
                 val = point[4] if len(point) > 4 else point[1]
                 equity_curve[dt.strftime("%Y-%m-%d")] = float(val)
             except (TypeError, ValueError, OverflowError, OSError):  # 잘못된 timestamp/값 형식
@@ -179,7 +202,7 @@ def _lean_run_to_api_response(
             "direction": "Buy" if direction == 0 else "Sell",
             "quantity": abs(order.get("quantity", 0)),
             "price": order.get("price", 0),
-            "time": order.get("time", ""),
+            "time": _lean_time_to_data_clock(order.get("time", "")),
         })
 
     return {
@@ -189,6 +212,9 @@ def _lean_run_to_api_response(
         "end_date": end_date,
         "initial_capital": initial_capital,
         "resolution": resolution,
+        "bar_minutes": bar_minutes if resolution == "minute" else None,
+        "intraday_exit": intraday_exit if resolution == "minute" else None,
+        "data_warnings": data_warnings or [],
         "final_capital": end_equity,
         "net_profit": net_profit,
         "net_profit_percent": net_profit_pct,
@@ -391,30 +417,65 @@ def _parse_request_dates(start_date: str, end_date: str) -> tuple[date, date]:
     return req_start, req_end
 
 
-def validate_minute_range(start_date: str, end_date: str) -> tuple[date, date]:
-    """분봉 백테스트 기간 검증. 문제가 있으면 400."""
+def bars_per_day(bar_minutes: int) -> int:
+    """하루 정규장의 N분봉 개수 (연속 매매 구간 + 종가 단일가 봉 1개)."""
+    return math.ceil(_CONTINUOUS_SESSION_MINUTES / bar_minutes) + 1
+
+
+def estimate_minute_bars(symbol_count: int, start: date, end: date, bar_minutes: int) -> int:
+    """분봉 백테스트가 LEAN에서 처리할 봉 수 추정 (영업일 기준, 휴장일 미반영이라 약간 큼)."""
+    weekdays = sum(
+        1 for offset in range((end - start).days + 1)
+        if (start + timedelta(days=offset)).weekday() < 5
+    )
+    return symbol_count * weekdays * bars_per_day(bar_minutes)
+
+
+def validate_minute_range(
+    start_date: str,
+    end_date: str,
+    symbol_count: int,
+    bar_minutes: int,
+    coverage: Optional[tuple[date, date]],
+) -> tuple[date, date, list[str]]:
+    """분봉 백테스트 기간·규모 검증. 문제가 있으면 400, 진행 가능하면 (시작일, 종료일, 경고)."""
     req_start, req_end = _parse_request_dates(start_date, end_date)
-    today = date.today()
-    earliest = today - timedelta(days=MINUTE_HISTORY_DAYS)
-    if req_end > today:
+    if req_end > date.today():
         raise HTTPException(status_code=400, detail="분봉 백테스트 종료일은 오늘 이후일 수 없습니다.")
+    if coverage is None:
+        raise HTTPException(
+            status_code=400,
+            detail="PostgreSQL에 분봉 데이터가 없습니다. PG_MINUTE_TABLE 설정을 확인하세요.",
+        )
+    earliest, latest = coverage
     if req_start < earliest:
         raise HTTPException(
             status_code=400,
-            detail=f"KIS는 최근 1년치 분봉만 제공합니다. 시작일을 {earliest.isoformat()} 이후로 설정하세요.",
+            detail=f"DB 분봉은 {earliest.isoformat()}부터 있습니다. 시작일을 {earliest.isoformat()} 이후로 설정하세요.",
         )
-    span_days = (req_end - req_start).days + 1
-    if span_days > MINUTE_MAX_DAYS:
+    if req_start > latest:
         raise HTTPException(
             status_code=400,
-            detail=f"분봉 백테스트 기간은 최대 {MINUTE_MAX_DAYS}일입니다 (요청 {span_days}일).",
+            detail=f"DB 분봉은 {latest.isoformat()}까지 있습니다 (매일 장 마감 후 수집). 시작일을 그 이전으로 설정하세요.",
         )
-    return req_start, req_end
 
+    warnings = []
+    if req_end > latest:
+        warnings.append(
+            f"{latest.isoformat()} 이후 분봉은 아직 DB에 없습니다 (매일 장 마감 후 수집). "
+            f"결과는 {latest.isoformat()}까지의 데이터로 계산했습니다."
+        )
 
-def _count_minute_rows(csv_path: Path) -> int:
-    with open(csv_path, "r") as f:
-        return sum(1 for line in f if line.strip())
+    estimated = estimate_minute_bars(symbol_count, req_start, min(req_end, latest), bar_minutes)
+    if estimated > MINUTE_MAX_BARS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"분봉 백테스트 규모가 너무 큽니다: 예상 {estimated:,}봉 (한도 {MINUTE_MAX_BARS:,}봉). "
+                "봉 주기를 늘리거나 종목 수·기간을 줄이세요."
+            ),
+        )
+    return req_start, req_end, warnings
 
 
 async def prepare_minute_market_data(
@@ -422,90 +483,105 @@ async def prepare_minute_market_data(
     start_date: str,
     end_date: str,
     workspace: Path,
+    bar_minutes: int = 1,
+    warmup_bars: int = 0,
 ) -> dict:
-    """KIS 주식일별분봉조회로 1분봉을 받아 LEAN 날짜별 CSV로 준비한다.
+    """PostgreSQL 분봉 테이블의 1분봉을 N분봉으로 묶어 LEAN 날짜별 CSV로 준비한다.
 
-    파일: data/equity/krx/minute/{종목}/{YYYYMMDD}.csv (휴장일은 빈 파일)
-    오늘 이전 날짜의 데이터가 있는 파일은 다시 받지 않는다(분봉은 확정 데이터).
+    파일: data/equity/krx/minute/{N}m/{종목}/{YYYYMMDD}.csv
+    - DB가 원본이다. 워밍업 구간(시작일 이전 거래일)부터 종료일까지 매번 다시 읽어 쓴다
+      (실측 20종목 × 1년 조회 약 5초).
+    - 분봉이 없는 날(주말·휴장·거래정지)은 빈 파일로 둬서 LEAN의 "파일 없음" 경고를 막는다.
 
     Returns:
-        {"downloaded": [...], "skipped": [...], "errors": [...], "source": "KIS 분봉"}
+        {"downloaded": [...], "skipped": [], "errors": [...], "warnings": [...],
+         "warmup_days": 시작일 이전 데이터의 달력 일수, "source": "PostgreSQL 분봉"}
     """
-    from kis_backtest.providers.kis.auth import KISAuth
-    from kis_backtest.providers.kis.data import KISDataProvider
+    from psycopg import Error as PostgresError
+    from kis_backtest.providers.postgres import PostgresDataProvider
 
-    req_start, req_end = validate_minute_range(start_date, end_date)
-    today = date.today()
-    minute_root = workspace / "data" / "equity" / "krx" / "minute"
-    result = {"downloaded": [], "skipped": [], "errors": [], "source": "KIS 분봉"}
+    result = {
+        "downloaded": [], "skipped": [], "errors": [], "warnings": [],
+        "warmup_days": 0, "source": "PostgreSQL 분봉",
+    }
 
-    provider = None
-    is_paper = False
-    for idx, symbol in enumerate(symbols, start=1):
-        symbol_dir = minute_root / symbol.lower()
-        symbol_dir.mkdir(parents=True, exist_ok=True)
+    def db_error(exc: Exception) -> dict:
+        logger.exception(f"[PostgreSQL 분봉] 조회 오류 ({type(exc).__name__})")
+        result["errors"] = [
+            {
+                "symbol": symbol,
+                "error": (
+                    f"PostgreSQL 분봉 조회 오류: {type(exc).__name__}. "
+                    "DB 연결, 권한, PG_MINUTE_TABLE 설정을 확인하세요."
+                ),
+            }
+            for symbol in symbols
+        ]
+        return result
 
-        # 워밍업 구간: 데이터 없이 빈 파일만 둔다.
-        pad_day = req_start - timedelta(days=_MINUTE_WARMUP_PAD_DAYS)
-        while pad_day < req_start:
-            (symbol_dir / f"{pad_day:%Y%m%d}.csv").touch(exist_ok=True)
-            pad_day += timedelta(days=1)
+    provider = PostgresDataProvider()
+    try:
+        coverage = provider.get_minute_coverage()
+    except PostgresError as exc:
+        return db_error(exc)
 
-        total_rows = 0
-        fetched_days = 0
-        try:
-            day = req_start
-            while day <= req_end:
-                csv_path = symbol_dir / f"{day:%Y%m%d}.csv"
-                if day.weekday() >= 5:
-                    csv_path.touch(exist_ok=True)
-                elif day < today and csv_path.exists() and csv_path.stat().st_size > 0:
-                    total_rows += _count_minute_rows(csv_path)
-                else:
-                    if provider is None:
-                        auth = KISAuth.from_env()
-                        is_paper = auth.is_paper
-                        provider = KISDataProvider(auth)
-                    bars = provider.get_minute_bars_for_date(symbol, day)
-                    DataConverter.bars_to_lean_minute_csv(bars, csv_path)
-                    total_rows += len(bars)
-                    fetched_days += 1
-                day += timedelta(days=1)
-        except _KIS_DATA_ERRORS as exc:
-            # 인증·모의투자 미지원 같은 오류는 다른 종목도 같으므로 여기서 멈춘다.
-            logger.error(f"[KIS 분봉] 조회 오류: {symbol} ({type(exc).__name__})")
-            if isinstance(exc, requests.RequestException):
-                hint = " KIS API 서버에 연결하지 못했습니다. 네트워크 상태를 확인하세요."
-            elif is_paper:
-                hint = " 주식일별분봉조회는 KIS 실전 인증이 필요합니다. 설정에서 실전 모드로 인증한 뒤 다시 실행하세요."
-            elif provider is None:
-                hint = " KIS 인증 설정(kis_devlp.yaml의 my_app/my_sec)을 확인하세요."
-            else:
-                hint = ""
-            for remaining_symbol in symbols[idx - 1:]:
-                result["errors"].append({
-                    "symbol": remaining_symbol,
-                    "error": f"KIS 분봉 조회 오류: {exc}.{hint}",
-                })
-            break
+    req_start, req_end, warnings = validate_minute_range(
+        start_date, end_date, len(symbols), bar_minutes, coverage
+    )
+    result["warnings"].extend(warnings)
 
-        if total_rows == 0:
+    # 워밍업: 지표 준비에 필요한 거래일 수(+1일 여유). 휴장일을 감안해 달력으로 넉넉히 거슬러 읽는다.
+    warmup_trading_days = math.ceil(warmup_bars / bars_per_day(bar_minutes)) + 1 if warmup_bars > 0 else 0
+    fetch_start = req_start
+    if warmup_trading_days:
+        fetch_start = max(coverage[0], req_start - timedelta(days=warmup_trading_days * 7 // 5 + 10))
+
+    try:
+        days_by_symbol = provider.get_minute_days(symbols, fetch_start, req_end)
+    except PostgresError as exc:
+        return db_error(exc)
+
+    prior_days = sorted({
+        day for days in days_by_symbol.values() for day, bars in days.items()
+        if day < req_start and bars
+    })
+    warmup_start = req_start
+    if warmup_trading_days and prior_days:
+        warmup_start = prior_days[-min(warmup_trading_days, len(prior_days))]
+    result["warmup_days"] = (req_start - warmup_start).days
+
+    minute_root = workspace / "data" / "equity" / "krx" / "minute" / f"{bar_minutes}m"
+    for symbol in symbols:
+        days = days_by_symbol.get(symbol.strip(), {})
+        bar_count = sum(len(bars) for day, bars in days.items() if day >= req_start)
+        if bar_count == 0:
             result["errors"].append({
                 "symbol": symbol,
                 "error": (
-                    f"KIS에서 {start_date} ~ {end_date} 분봉을 받지 못했습니다 "
-                    "(영업일이 포함됐는지, 최근 1년 이내인지 확인하세요)"
+                    f"DB에 {start_date} ~ {end_date} 분봉이 없습니다 "
+                    "(종목코드, 상장일, 거래정지 여부를 확인하세요)."
                 ),
             })
             continue
 
-        if fetched_days:
-            result["downloaded"].append(symbol)
-        else:
-            result["skipped"].append(symbol)
+        symbol_dir = minute_root / symbol.lower()
+        day = warmup_start
+        while day <= req_end:
+            bars = days.get(day)
+            aggregated = DataConverter.aggregate_minute_bars(bars, bar_minutes) if bars else []
+            DataConverter.write_lean_minute_day(aggregated, day, symbol_dir / f"{day:%Y%m%d}.csv")
+            day += timedelta(days=1)
+
+        used_days = {day: bars for day, bars in days.items() if day >= warmup_start}
+        for gap_day, ratio in DataConverter.find_price_gaps(used_days):
+            result["warnings"].append(
+                f"{symbol} {gap_day.isoformat()}: 전일 종가 대비 시가 {ratio}배 — 액면분할·병합 등 "
+                "가격 불연속이 의심됩니다. 분봉은 수정주가가 아니라 이 종목 수익률이 왜곡될 수 있습니다."
+            )
+
+        result["downloaded"].append(symbol)
         logger.info(
-            f"[KIS 분봉] 준비 완료 ({idx}/{len(symbols)}): {symbol}, "
-            f"{total_rows} bars, API 조회 {fetched_days}일"
+            f"[PostgreSQL 분봉] 준비 완료: {symbol}, 1분봉 {bar_count}개 → {bar_minutes}분봉"
         )
 
     return result
@@ -517,14 +593,42 @@ async def prepare_backtest_data(
     start_date: str,
     end_date: str,
     workspace: Path,
+    bar_minutes: int = 1,
+    warmup_bars: int = 0,
 ) -> dict:
-    """해상도에 맞춰 LEAN 입력 데이터를 준비한다 (일봉: PostgreSQL, 분봉: KIS)."""
+    """해상도에 맞춰 LEAN 입력 데이터를 준비한다 (일봉·분봉 모두 PostgreSQL)."""
     if resolution == "minute":
-        return await prepare_minute_market_data(symbols, start_date, end_date, workspace)
+        return await prepare_minute_market_data(
+            symbols, start_date, end_date, workspace,
+            bar_minutes=bar_minutes, warmup_bars=warmup_bars,
+        )
     _parse_request_dates(start_date, end_date)
     result = await prepare_market_data(symbols, start_date, end_date, workspace)
     result["source"] = "PostgreSQL"
     return result
+
+
+@router.get(
+    "/minute-coverage",
+    summary="분봉 데이터 범위",
+    description="PostgreSQL 분봉 테이블의 첫·마지막 거래일과 분봉 백테스트 한도.",
+)
+async def minute_coverage() -> Dict[str, Any]:
+    from psycopg import Error as PostgresError
+    from kis_backtest.providers.postgres import PostgresDataProvider
+
+    try:
+        coverage = PostgresDataProvider().get_minute_coverage()
+    except (PostgresError, ValueError) as exc:
+        logger.warning(f"[PostgreSQL 분봉] 범위 조회 실패: {type(exc).__name__}")
+        raise HTTPException(status_code=503, detail=f"PostgreSQL 분봉 범위 조회 실패: {type(exc).__name__}")
+    return {
+        "earliest": coverage[0].isoformat() if coverage else None,
+        "latest": coverage[1].isoformat() if coverage else None,
+        "bar_minutes": list(BAR_MINUTES_CHOICES),
+        "bars_per_day": {str(n): bars_per_day(n) for n in BAR_MINUTES_CHOICES},
+        "max_bars": MINUTE_MAX_BARS,
+    }
 
 
 async def prepare_benchmark_data(
@@ -655,12 +759,28 @@ async def run_backtest(request: BacktestRequest) -> BacktestResponse:
         start_date = start_date.isoformat()
     if isinstance(end_date, date):
         end_date = end_date.isoformat()
-    
+
+    # 코드 생성기 준비 (분봉 워밍업 데이터 범위를 정하려면 지표 기간이 먼저 필요하다)
+    try:
+        config = CodeGenConfig(
+            commission_rate=request.commission_rate or 0.00015,
+            tax_rate=request.tax_rate or 0.002,
+            slippage=request.slippage or 0.0,
+            initial_capital=request.initial_capital,
+            resolution=request.resolution,
+            bar_minutes=request.bar_minutes,
+            intraday_exit=request.intraday_exit,
+        )
+        generator = LeanCodeGenerator(definition, config=config)
+        warmup_bars = generator.warmup_bars()
+    except BOUNDARY_ERRORS as e:
+        raise HTTPException(status_code=400, detail=f"Code generation failed: {e}")
+
     # 워크스페이스 경로
     manager = LeanProjectManager()
     workspace = manager.workspace
-    
-    # 시장 데이터 준비 (일봉: PostgreSQL / 분봉: KIS → Lean CSV)
+
+    # 시장 데이터 준비 (일봉·분봉 모두 PostgreSQL → Lean CSV)
     data_started = perf_counter()
     try:
         data_result = await prepare_backtest_data(
@@ -669,6 +789,8 @@ async def run_backtest(request: BacktestRequest) -> BacktestResponse:
             start_date=start_date,
             end_date=end_date,
             workspace=workspace,
+            bar_minutes=request.bar_minutes,
+            warmup_bars=warmup_bars,
         )
         logger.info(
             f"[Data] 결과: {data_result['source']} 조회 {len(data_result['downloaded'])}, "
@@ -714,15 +836,7 @@ async def run_backtest(request: BacktestRequest) -> BacktestResponse:
     # Lean 코드 생성
     codegen_started = perf_counter()
     try:
-        # 거래 비용 설정
-        config = CodeGenConfig(
-            commission_rate=request.commission_rate or 0.00015,
-            tax_rate=request.tax_rate or 0.002,
-            slippage=request.slippage or 0.0,
-            initial_capital=request.initial_capital,
-            resolution=request.resolution,
-        )
-        generator = LeanCodeGenerator(definition, config=config)
+        config.warmup_days = data_result.get("warmup_days", 0)
         code = generator.generate(
             symbols=request.symbols,
             start_date=start_date,
@@ -763,7 +877,10 @@ async def run_backtest(request: BacktestRequest) -> BacktestResponse:
         project.main_py.write_text(code)
 
         lean_started = perf_counter()
-        lean_run = LeanExecutor.run(project)
+        lean_run = LeanExecutor.run(
+            project,
+            timeout=MINUTE_LEAN_TIMEOUT if request.resolution == "minute" else DAILY_LEAN_TIMEOUT,
+        )
         logger.info(
             f"[Timing] phase=lean_execution seconds={perf_counter() - lean_started:.3f} "
             f"success={lean_run.success}"
@@ -775,6 +892,9 @@ async def run_backtest(request: BacktestRequest) -> BacktestResponse:
                 start_date, end_date, request.initial_capital,
                 workspace=workspace,
                 resolution=request.resolution,
+                bar_minutes=request.bar_minutes,
+                intraday_exit=request.intraday_exit,
+                data_warnings=data_result.get("warnings"),
             )
             logger.info(
                 f"[Timing] phase=total seconds={perf_counter() - request_started:.3f}"
@@ -807,7 +927,9 @@ class CustomBacktestRequest(BaseModel):
     commission_rate: Optional[float] = 0.00015  # 수수료율 (기본 0.015%)
     tax_rate: Optional[float] = 0.002  # 거래세율 (기본 0.2%)
     slippage: Optional[float] = 0.0  # 슬리피지 (기본 0%)
-    resolution: Literal["daily", "minute"] = "daily"  # 봉 단위 (daily: PostgreSQL, minute: KIS 1분봉)
+    resolution: Literal["daily", "minute"] = "daily"  # 봉 단위 (둘 다 PostgreSQL)
+    bar_minutes: BarMinutes = 1  # 분봉 주기 (minute 전용)
+    intraday_exit: Optional[str] = Field(default=None, pattern=r"^\d{2}:\d{2}$")  # 장마감 청산 HH:MM (minute 전용)
 
 
 @router.post(
@@ -833,12 +955,30 @@ async def run_custom_backtest(request: CustomBacktestRequest) -> BacktestRespons
         )
     except _STRATEGY_LOAD_ERRORS as e:
         raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
-    
+    if schema is None:
+        raise HTTPException(status_code=400, detail="전략 스키마 생성 실패")
+
+    # 코드 생성기 준비 (분봉 워밍업 데이터 범위를 정하려면 지표 기간이 먼저 필요하다)
+    try:
+        config = CodeGenConfig(
+            commission_rate=request.commission_rate or 0.00015,
+            tax_rate=request.tax_rate or 0.002,
+            slippage=request.slippage or 0.0,
+            initial_capital=request.initial_capital,
+            resolution=request.resolution,
+            bar_minutes=request.bar_minutes,
+            intraday_exit=request.intraday_exit,
+        )
+        generator = LeanCodeGenerator(schema, config=config)
+        warmup_bars = generator.warmup_bars()
+    except BOUNDARY_ERRORS as e:
+        raise HTTPException(status_code=400, detail=f"Code generation failed: {e}")
+
     # 워크스페이스 경로
     manager = LeanProjectManager()
     workspace = manager.workspace
-    
-    # 시장 데이터 준비 (일봉: PostgreSQL / 분봉: KIS → Lean CSV)
+
+    # 시장 데이터 준비 (일봉·분봉 모두 PostgreSQL → Lean CSV)
     data_started = perf_counter()
     try:
         data_result = await prepare_backtest_data(
@@ -847,6 +987,8 @@ async def run_custom_backtest(request: CustomBacktestRequest) -> BacktestRespons
             start_date=request.start_date,
             end_date=request.end_date,
             workspace=workspace,
+            bar_minutes=request.bar_minutes,
+            warmup_bars=warmup_bars,
         )
         logger.info(
             f"[Data] 결과: {data_result['source']} 조회 {len(data_result['downloaded'])}, "
@@ -892,18 +1034,7 @@ async def run_custom_backtest(request: CustomBacktestRequest) -> BacktestRespons
     # Lean 코드 생성 (스키마 기반)
     codegen_started = perf_counter()
     try:
-        if schema is None:
-            raise HTTPException(status_code=400, detail="전략 스키마 생성 실패")
-        
-        # 거래 비용 설정
-        config = CodeGenConfig(
-            commission_rate=request.commission_rate or 0.00015,
-            tax_rate=request.tax_rate or 0.002,
-            slippage=request.slippage or 0.0,
-            initial_capital=request.initial_capital,
-            resolution=request.resolution,
-        )
-        generator = LeanCodeGenerator(schema, config=config)
+        config.warmup_days = data_result.get("warmup_days", 0)
         code = generator.generate(
             symbols=request.symbols,
             start_date=request.start_date,
@@ -944,7 +1075,10 @@ async def run_custom_backtest(request: CustomBacktestRequest) -> BacktestRespons
         project.main_py.write_text(code)
 
         lean_started = perf_counter()
-        lean_run = LeanExecutor.run(project)
+        lean_run = LeanExecutor.run(
+            project,
+            timeout=MINUTE_LEAN_TIMEOUT if request.resolution == "minute" else DAILY_LEAN_TIMEOUT,
+        )
         logger.info(
             f"[Timing] phase=lean_execution seconds={perf_counter() - lean_started:.3f} "
             f"success={lean_run.success}"
@@ -956,6 +1090,9 @@ async def run_custom_backtest(request: CustomBacktestRequest) -> BacktestRespons
                 request.start_date, request.end_date, request.initial_capital,
                 workspace=workspace,
                 resolution=request.resolution,
+                bar_minutes=request.bar_minutes,
+                intraday_exit=request.intraday_exit,
+                data_warnings=data_result.get("warnings"),
             )
             logger.info(
                 f"[Timing] phase=total seconds={perf_counter() - request_started:.3f}"

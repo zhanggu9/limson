@@ -18,30 +18,43 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { cn, formatCurrency, formatPercent } from "@/lib/utils";
-import { listStrategies, runBacktest, runCustomBacktest } from "@/lib/api";
+import { getMinuteCoverage, listStrategies, runBacktest, runCustomBacktest } from "@/lib/api";
 import { FileDropZone } from "@/components/file";
 import { StockInput } from "@/components/symbols";
 import { EquityChart } from "@/components/backtest";
 import type { ChartDataPoint, TradeMarker } from "@/components/backtest";
-import type { Strategy, BacktestResult, BacktestResolution, ParamDefinition } from "@/types";
+import type { Strategy, BacktestResult, BacktestResolution, BarMinutes, MinuteCoverage, ParamDefinition } from "@/types";
 
-// 분봉 백테스트 제한 (backtester/backend/routes/backtest.py 와 같은 값)
-// KIS 주식일별분봉조회는 최근 1년치만 보관하고, 종목·영업일마다 API를 여러 번 호출한다.
-const MINUTE_HISTORY_DAYS = 365;
-const MINUTE_MAX_DAYS = 92;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const RESOLUTION_OPTIONS: { value: BacktestResolution; label: string }[] = [
   { value: "daily", label: "일봉" },
-  { value: "minute", label: "분봉 (1분)" },
+  { value: "minute", label: "분봉" },
 ];
+
+const BAR_MINUTE_OPTIONS: BarMinutes[] = [1, 3, 5, 10, 15, 30, 60];
+
+// 예상 소요시간 (실측: LEAN 기동 약 5초 + 커스텀 분봉 초당 약 3,500봉)
+const LEAN_STARTUP_SECONDS = 5;
+const LEAN_BARS_PER_SECOND = 3500;
 
 function toDateInput(date: Date): string {
   return date.toISOString().split("T")[0];
 }
 
-function daysBetween(start: string, end: string): number {
-  return Math.round((Date.parse(end) - Date.parse(start)) / DAY_MS);
+/** 시작일~종료일(포함)의 평일 수 — 서버 estimate_minute_bars 와 같은 기준 */
+function countWeekdays(start: string, end: string): number {
+  let count = 0;
+  for (let t = Date.parse(start); t <= Date.parse(end); t += DAY_MS) {
+    const day = new Date(t).getUTCDay();
+    if (day !== 0 && day !== 6) count += 1;
+  }
+  return count;
+}
+
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `약 ${Math.max(1, Math.round(seconds))}초`;
+  return `약 ${Math.round(seconds / 60)}분`;
 }
 
 // 통계 카드 컴포넌트
@@ -182,7 +195,13 @@ export default function BacktestPage() {
   const [endDate, setEndDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [initialCapital, setInitialCapital] = useState(100_000_000);
   const [resolution, setResolution] = useState<BacktestResolution>("daily");
-  
+  // 분봉 전용 설정: 봉 주기, 장마감 청산 (지정 시각 이후 신규 진입 금지 + 보유분 청산)
+  const [barMinutes, setBarMinutes] = useState<BarMinutes>(5);
+  const [intradayExitOn, setIntradayExitOn] = useState(false);
+  const [intradayExitTime, setIntradayExitTime] = useState("15:15");
+  const [minuteCoverage, setMinuteCoverage] = useState<MinuteCoverage | null>(null);
+  const [minuteCoverageError, setMinuteCoverageError] = useState(false);
+
   // 거래 비용 설정
   const [commissionRate, setCommissionRate] = useState(0.015); // 0.015%
   const [taxRate, setTaxRate] = useState(0.2); // 0.2%
@@ -228,7 +247,7 @@ export default function BacktestPage() {
   const loadingMessages = [
     "백테스트 요청 확인 중...",
     resolution === "minute"
-      ? "KIS 분봉 데이터 받는 중 (종목·기간에 따라 수 분 걸릴 수 있음)..."
+      ? `PostgreSQL 분봉 데이터를 ${barMinutes}분봉으로 준비 중...`
       : "PostgreSQL 주가 데이터 준비 중...",
     "벤치마크 데이터 확인 중...",
     "LEAN 전략 코드 생성 중...",
@@ -268,6 +287,13 @@ export default function BacktestPage() {
     loadData();
   }, []);
 
+  // 분봉 데이터 범위 (DB에 있는 첫·마지막 거래일) — 분봉 기간 입력 범위와 검증에 쓴다
+  useEffect(() => {
+    getMinuteCoverage()
+      .then((coverage) => setMinuteCoverage(coverage))
+      .catch(() => setMinuteCoverageError(true));
+  }, []);
+
   // 화면에서 즉시 실행할 수 있도록, 이전에 성공한 LEAN 입력값을 채운다.
   const loadLeanTestPreset = useCallback(() => {
     setSelectedId("sma_crossover");
@@ -302,6 +328,10 @@ export default function BacktestPage() {
     setError(null);
     setResult(null);
 
+    const minuteOptions = resolution === "minute"
+      ? { bar_minutes: barMinutes, intraday_exit: intradayExitOn ? intradayExitTime : null }
+      : undefined;
+
     try {
       let response;
 
@@ -316,7 +346,8 @@ export default function BacktestPage() {
           commissionRate / 100, // % → 소수점
           taxRate / 100,
           slippage / 100,
-          resolution
+          resolution,
+          minuteOptions
         );
       }
       // 2. 전략 선택 시 프리셋 백테스트
@@ -332,6 +363,7 @@ export default function BacktestPage() {
           slippage: slippage / 100,
           param_overrides: Object.keys(paramOverrides).length > 0 ? paramOverrides : undefined,
           resolution,
+          ...minuteOptions,
         });
       } else {
         throw new Error("전략을 선택하거나 파일을 Import하세요");
@@ -347,25 +379,34 @@ export default function BacktestPage() {
     } finally {
       setIsRunning(false);
     }
-  }, [selectedId, importedYaml, selectedStocks, startDate, endDate, initialCapital, commissionRate, taxRate, slippage, paramOverrides, resolution]);
+  }, [selectedId, importedYaml, selectedStocks, startDate, endDate, initialCapital, commissionRate, taxRate, slippage, paramOverrides, resolution, barMinutes, intradayExitOn, intradayExitTime]);
 
-  // 분봉은 가능한 기간이 좁으므로, 전환할 때 범위를 벗어나 있으면 최근 1주일로 맞춘다.
+  const minuteLimits = useMemo(() => {
+    const today = toDateInput(new Date());
+    const latest = minuteCoverage?.latest && minuteCoverage.latest < today ? minuteCoverage.latest : today;
+    return { earliest: minuteCoverage?.earliest ?? undefined, latest, today };
+  }, [minuteCoverage]);
+
+  // 분봉으로 바꿀 때 기간이 DB 범위를 벗어나 있으면 DB의 최근 한 달로 맞춘다.
   const handleResolutionChange = useCallback((next: BacktestResolution) => {
     setResolution(next);
     if (next !== "minute") return;
-    const today = toDateInput(new Date());
-    const earliest = toDateInput(new Date(Date.now() - MINUTE_HISTORY_DAYS * DAY_MS));
-    const end = endDate > today ? today : endDate;
-    if (startDate < earliest || daysBetween(startDate, end) + 1 > MINUTE_MAX_DAYS) {
-      setEndDate(end);
-      setStartDate(toDateInput(new Date(Date.parse(end) - 6 * DAY_MS)));
+    const { earliest, latest } = minuteLimits;
+    if ((earliest && startDate < earliest) || endDate > latest) {
+      const monthAgo = toDateInput(new Date(Date.parse(latest) - 30 * DAY_MS));
+      setEndDate(latest);
+      setStartDate(earliest && monthAgo < earliest ? earliest : monthAgo);
     }
-  }, [startDate, endDate]);
+  }, [startDate, endDate, minuteLimits]);
 
-  const minuteLimits = useMemo(() => ({
-    earliest: toDateInput(new Date(Date.now() - MINUTE_HISTORY_DAYS * DAY_MS)),
-    today: toDateInput(new Date()),
-  }), []);
+  // 분봉 규모 추정: 종목 수 × 평일 수 × 하루 봉 수 (서버도 같은 기준으로 한도를 넘으면 400)
+  const minuteEstimate = useMemo(() => {
+    if (resolution !== "minute" || !minuteCoverage || !startDate || !endDate || startDate > endDate) return null;
+    const end = endDate < minuteLimits.latest ? endDate : minuteLimits.latest;
+    const perDay = minuteCoverage.bars_per_day[String(barMinutes)] ?? 0;
+    const bars = Math.max(1, selectedStocks.length) * countWeekdays(startDate, end) * perDay;
+    return { bars, seconds: LEAN_STARTUP_SECONDS + bars / LEAN_BARS_PER_SECOND, maxBars: minuteCoverage.max_bars };
+  }, [resolution, minuteCoverage, startDate, endDate, barMinutes, selectedStocks.length, minuteLimits]);
 
   // 분봉 기간 검증 (서버도 같은 기준으로 400을 돌려준다)
   const minuteRangeError = useMemo(() => {
@@ -373,13 +414,20 @@ export default function BacktestPage() {
     if (!startDate || !endDate) return "시작일과 종료일을 입력하세요.";
     if (startDate > endDate) return "시작일은 종료일보다 늦을 수 없습니다.";
     if (endDate > minuteLimits.today) return "분봉 종료일은 오늘 이후일 수 없습니다.";
-    if (startDate < minuteLimits.earliest) {
-      return `KIS는 최근 1년치 분봉만 제공합니다. 시작일을 ${minuteLimits.earliest} 이후로 설정하세요.`;
+    if (minuteLimits.earliest && startDate < minuteLimits.earliest) {
+      return `DB 분봉은 ${minuteLimits.earliest}부터 있습니다. 시작일을 그 이후로 설정하세요.`;
     }
-    const span = daysBetween(startDate, endDate) + 1;
-    if (span > MINUTE_MAX_DAYS) return `분봉 기간은 최대 ${MINUTE_MAX_DAYS}일입니다 (현재 ${span}일).`;
+    if (startDate > minuteLimits.latest) {
+      return `DB 분봉은 ${minuteLimits.latest}까지 있습니다. 시작일을 그 이전으로 설정하세요.`;
+    }
+    if (minuteEstimate && minuteEstimate.bars > minuteEstimate.maxBars) {
+      return `예상 ${minuteEstimate.bars.toLocaleString()}봉으로 한도(${minuteEstimate.maxBars.toLocaleString()}봉)를 넘습니다. 봉 주기를 늘리거나 종목·기간을 줄이세요.`;
+    }
+    if (intradayExitOn && !(intradayExitTime > "09:00" && intradayExitTime <= "15:30")) {
+      return "장마감 청산 시각은 09:01 ~ 15:30 사이여야 합니다.";
+    }
     return null;
-  }, [resolution, startDate, endDate, minuteLimits]);
+  }, [resolution, startDate, endDate, minuteLimits, minuteEstimate, intradayExitOn, intradayExitTime]);
 
   // Y축 범위 계산 (15% 패딩)
   const yAxisDomain = useMemo((): [number, number] => {
@@ -636,11 +684,46 @@ export default function BacktestPage() {
                   })}
                 </div>
                 <p className="text-xs text-slate-400 mt-1">
-                  {resolution === "minute"
-                    ? `KIS 1분봉 · 최근 1년 이내 · 최대 ${MINUTE_MAX_DAYS}일 · 실전 인증 필요 · 지표 기간은 분봉 개수 기준`
-                    : "PostgreSQL 일봉"}
+                  {resolution !== "minute"
+                    ? "PostgreSQL 일봉"
+                    : minuteCoverage?.earliest
+                      ? `PostgreSQL 분봉 · ${minuteCoverage.earliest} ~ ${minuteCoverage.latest} (매일 장 마감 후 추가) · 지표 기간은 봉 개수 기준`
+                      : minuteCoverageError
+                        ? "분봉 데이터 범위를 불러오지 못했습니다. 실행하면 서버가 범위를 확인합니다."
+                        : "분봉 데이터 범위 확인 중..."}
                 </p>
               </div>
+              {resolution === "minute" && (
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">봉 주기</label>
+                  <div
+                    role="radiogroup"
+                    aria-label="봉 주기"
+                    className="grid grid-cols-7 gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-800"
+                  >
+                    {BAR_MINUTE_OPTIONS.map((minutes) => {
+                      const active = barMinutes === minutes;
+                      return (
+                        <button
+                          key={minutes}
+                          type="button"
+                          role="radio"
+                          aria-checked={active}
+                          onClick={() => setBarMinutes(minutes)}
+                          className={cn(
+                            "py-1.5 rounded-md text-xs font-medium transition-colors",
+                            active
+                              ? "bg-white dark:bg-slate-700 text-kis-blue shadow-sm"
+                              : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+                          )}
+                        >
+                          {minutes}분
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="text-xs text-slate-500 mb-1 block">시작일</label>
@@ -648,7 +731,7 @@ export default function BacktestPage() {
                     type="date"
                     value={startDate}
                     min={resolution === "minute" ? minuteLimits.earliest : undefined}
-                    max={resolution === "minute" ? minuteLimits.today : undefined}
+                    max={resolution === "minute" ? minuteLimits.latest : undefined}
                     onChange={(e) => setStartDate(e.target.value)}
                     className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-sm"
                   />
@@ -665,6 +748,38 @@ export default function BacktestPage() {
                   />
                 </div>
               </div>
+              {resolution === "minute" && (
+                <div className="flex items-center justify-between gap-2">
+                  <label className="flex items-center gap-2 text-xs text-slate-500">
+                    <input
+                      type="checkbox"
+                      checked={intradayExitOn}
+                      onChange={(e) => setIntradayExitOn(e.target.checked)}
+                    />
+                    장마감 청산 (당일 매매)
+                  </label>
+                  <input
+                    type="time"
+                    value={intradayExitTime}
+                    min="09:01"
+                    max="15:30"
+                    disabled={!intradayExitOn}
+                    onChange={(e) => setIntradayExitTime(e.target.value)}
+                    aria-label="장마감 청산 시각"
+                    className="px-2 py-1 border border-slate-200 dark:border-slate-700 rounded-lg text-sm disabled:opacity-50"
+                  />
+                </div>
+              )}
+              {resolution === "minute" && intradayExitOn && (
+                <p className="text-xs text-slate-400 -mt-1">
+                  {intradayExitTime} 이후 신규 진입을 막고 보유 종목을 그 시각 봉에서 청산합니다.
+                </p>
+              )}
+              {resolution === "minute" && minuteEstimate && !minuteRangeError && (
+                <p className="text-xs text-slate-400">
+                  예상 {minuteEstimate.bars.toLocaleString()}봉 · 실행 {formatDuration(minuteEstimate.seconds)}
+                </p>
+              )}
               {minuteRangeError && (
                 <p role="alert" className="text-xs text-amber-600 dark:text-amber-400">
                   {minuteRangeError}
@@ -806,8 +921,22 @@ export default function BacktestPage() {
           {result ? (
             <>
               <p className="text-xs text-slate-500">
-                {result.resolution === "minute" ? "1분봉" : "일봉"} 백테스트 · {result.start_date} ~ {result.end_date}
+                {result.resolution === "minute" ? `${result.bar_minutes ?? 1}분봉` : "일봉"} 백테스트 · {result.start_date} ~ {result.end_date}
+                {result.intraday_exit && ` · ${result.intraday_exit} 장마감 청산`}
               </p>
+              {result.data_warnings && result.data_warnings.length > 0 && (
+                <div className="p-3 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 text-xs text-amber-700 dark:text-amber-300 space-y-1">
+                  <p className="flex items-center gap-1 font-medium">
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    데이터 확인 필요
+                  </p>
+                  <ul className="list-disc ml-4 space-y-0.5">
+                    {result.data_warnings.map((warning, i) => (
+                      <li key={i}>{warning}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {/* 요약 카드 */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <StatCard
@@ -937,7 +1066,11 @@ export default function BacktestPage() {
                           {result.trades.map((trade, i) => (
                             <tr key={i} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
                               <td className="py-1.5 pr-4 text-slate-500 dark:text-slate-400 text-xs">
-                                {trade.time ? new Date(trade.time).toLocaleDateString("ko-KR") : "-"}
+                                {!trade.time
+                                  ? "-"
+                                  : result.resolution === "minute"
+                                    ? trade.time.slice(0, 16).replace("T", " ")
+                                    : new Date(trade.time).toLocaleDateString("ko-KR")}
                               </td>
                               <td className="py-1.5 pr-4 font-mono">{trade.symbol}</td>
                               <td className={cn("py-1.5 pr-4 font-medium", trade.direction === "Buy" ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400")}>

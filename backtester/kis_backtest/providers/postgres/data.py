@@ -72,6 +72,10 @@ class PostgresDataProvider:
         self._low_col = _env_column("PG_LOW_COLUMN", "low")
         self._close_col = _env_column("PG_CLOSE_COLUMN", "close")
         self._volume_col = _env_column("PG_VOLUME_COLUMN", "volume")
+        # 분봉 테이블: 한 행 = 한 종목의 하루치 1분봉 배열 (pg-stock-api 의 ohlcv_minute_day 형식)
+        self._minute_table = _quote_table_name(
+            os.getenv("PG_MINUTE_TABLE", "public.ohlcv_minute_day").strip()
+        )
 
     def get_history(
         self,
@@ -146,6 +150,58 @@ class PostgresDataProvider:
                 ) from exc
 
         return bars
+
+    def get_minute_coverage(self) -> tuple[date, date] | None:
+        """분봉 테이블에 들어 있는 첫 거래일과 마지막 거래일 (비어 있으면 None)."""
+        sql = f"SELECT min(trade_date), max(trade_date) FROM {self._minute_table}"
+        with psycopg.connect(self._dsn, connect_timeout=10) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(sql)
+                earliest, latest = cursor.fetchone()
+        if earliest is None or latest is None:
+            return None
+        return earliest, latest
+
+    def get_minute_days(
+        self,
+        symbols: list[str],
+        start: date,
+        end: date,
+    ) -> dict[str, dict[date, list[tuple[int, int, int, int, int, int]]]]:
+        """여러 종목의 1분봉을 한 번의 쿼리로 읽는다.
+
+        Returns:
+            {종목: {거래일: [(hhmm, open, high, low, close, volume), ...]}}
+            hhmm은 봉 시작 시각(930 = 09:30), 시각 오름차순.
+            분봉이 없던 날(bar_count = 0, 거래정지 등)은 빈 리스트.
+        """
+        codes = [s.strip() for s in symbols if s and s.strip()]
+        if not codes:
+            raise ValueError("종목코드(symbols)는 비어 있을 수 없습니다.")
+        if start > end:
+            raise ValueError("시작일(start)은 종료일(end)보다 늦을 수 없습니다.")
+
+        sql = f"""
+            SELECT ticker_code, trade_date, hhmm, open, high, low, close, volume
+            FROM {self._minute_table}
+            WHERE ticker_code = ANY(%s)
+              AND trade_date >= %s
+              AND trade_date <= %s
+        """
+        with psycopg.connect(self._dsn, connect_timeout=10) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(sql, (codes, start, end))
+                rows = cursor.fetchall()
+
+        result: dict[str, dict[date, list[tuple[int, int, int, int, int, int]]]] = {
+            code: {} for code in codes
+        }
+        for code, trade_date, hhmm, opens, highs, lows, closes, volumes in rows:
+            bars = sorted(zip(hhmm or [], opens or [], highs or [], lows or [], closes or [], volumes or []))
+            result.setdefault(code, {})[trade_date] = [
+                (int(t), int(o), int(h), int(lo), int(c), int(v)) for t, o, h, lo, c, v in bars
+            ]
+        return result
 
     def get_close_panel(
         self,

@@ -4,8 +4,9 @@ KIS OpenAPI 데이터를 Lean이 읽을 수 있는 CSV 포맷으로 변환.
 """
 
 import logging
+from datetime import date
 from pathlib import Path
-from typing import Dict, List, TYPE_CHECKING
+from typing import Dict, List, Tuple, TYPE_CHECKING
 
 import pandas as pd
 
@@ -13,6 +14,11 @@ if TYPE_CHECKING:
     from ..models import Bar
 
 logger = logging.getLogger(__name__)
+
+# KRX 정규장 시작(09:00)과 종가 단일가 매매 시작(15:20) — 자정 기준 분.
+# 15:20 이후의 마지막 봉만 종가 단일가 봉으로 본다.
+_SESSION_OPEN_MINUTE = 9 * 60
+_CLOSING_AUCTION_EARLIEST = 15 * 60 + 20
 
 
 class DataConverter:
@@ -186,27 +192,102 @@ class DataConverter:
         # 변환 실행
         return cls._export_symbol(symbol, df, output_path, market_type)
 
-    @classmethod
-    def bars_to_lean_minute_csv(cls, bars: List["Bar"], csv_path: Path) -> Path:
-        """하루치 1분봉을 LEAN 분봉 CSV로 저장한다 (빈 리스트면 빈 파일 = 휴장일).
+    @staticmethod
+    def aggregate_minute_bars(
+        bars: List[Tuple[int, int, int, int, int, int]],
+        bar_minutes: int,
+    ) -> List[Tuple[int, int, int, int, int, int, int]]:
+        """하루치 1분봉을 N분봉으로 묶는다.
 
-        한 줄: YYYYMMDDHHMM,open,high,low,close,volume (헤더 없음, KRX 원 단위 정수)
-        중간에 실패해도 깨진 캐시가 남지 않도록 임시 파일에 쓴 뒤 교체한다.
+        Args:
+            bars: [(hhmm, open, high, low, close, volume), ...] 시각 오름차순 (hhmm = 봉 시작 시각)
+            bar_minutes: 묶을 분 수 (1이면 그대로)
+
+        Returns:
+            [(시작분, 끝분, open, high, low, close, volume), ...] — 분은 자정 기준 (09:00 = 540)
+
+        - 구간은 09:00 기준 N분 단위로 자른다.
+        - 그날 마지막 봉이 15:20 이후이고 바로 앞 봉과 떨어져 있으면 종가 단일가 봉으로 보고 따로 둔다
+          (수능일처럼 장이 늦게 끝나는 날도 같은 규칙).
+        - 봉 끝 시각은 시작 + N분이되 종가 단일가 봉 시작 시각을 넘지 않는다.
+          LEAN은 끝 시각에 봉을 전달하므로 전략은 봉이 끝난 뒤에야 그 값을 본다.
+        """
+        if bar_minutes < 1:
+            raise ValueError("bar_minutes는 1 이상이어야 합니다.")
+        minutes = [((t // 100) * 60 + t % 100, o, h, lo, c, v) for t, o, h, lo, c, v in bars]
+
+        closing = None
+        if minutes and minutes[-1][0] >= _CLOSING_AUCTION_EARLIEST and (
+            len(minutes) == 1 or minutes[-1][0] - minutes[-2][0] > 1
+        ):
+            closing = minutes.pop()
+
+        out: List[list] = []
+        for minute, o, h, lo, c, v in minutes:
+            start = minute - (minute - _SESSION_OPEN_MINUTE) % bar_minutes
+            if out and out[-1][0] == start:
+                bucket = out[-1]
+                bucket[3] = max(bucket[3], h)
+                bucket[4] = min(bucket[4], lo)
+                bucket[5] = c
+                bucket[6] += v
+            else:
+                out.append([start, start + bar_minutes, o, h, lo, c, v])
+
+        if closing is not None:
+            closing_start = closing[0]
+            for bucket in out:
+                bucket[1] = min(bucket[1], closing_start)
+            out.append([closing_start, closing_start + 1, *closing[1:]])
+        return [tuple(bucket) for bucket in out]
+
+    @staticmethod
+    def write_lean_minute_day(
+        bars: List[Tuple[int, int, int, int, int, int, int]],
+        day: date,
+        csv_path: Path,
+    ) -> Path:
+        """aggregate_minute_bars 결과 하루치를 LEAN 분봉 CSV로 저장한다 (빈 리스트면 빈 파일 = 휴장·거래정지).
+
+        한 줄: 시작 YYYYMMDDHHMM,open,high,low,close,volume,끝 YYYYMMDDHHMM (헤더 없음, 원 단위 정수)
+        중간에 실패해도 깨진 파일이 남지 않도록 임시 파일에 쓴 뒤 교체한다.
         """
         csv_path = Path(csv_path)
         csv_path.parent.mkdir(parents=True, exist_ok=True)
-        lines = []
-        seen = set()
-        for bar in sorted(bars, key=lambda b: b.time):
-            stamp = bar.time.strftime("%Y%m%d%H%M")
-            if stamp in seen:
-                continue
-            seen.add(stamp)
-            lines.append(
-                f"{stamp},{int(round(bar.open))},{int(round(bar.high))},"
-                f"{int(round(bar.low))},{int(round(bar.close))},{int(bar.volume)}\n"
-            )
+        stamp = day.strftime("%Y%m%d")
+        lines = [
+            f"{stamp}{start // 60:02d}{start % 60:02d},{o},{h},{lo},{c},{v},"
+            f"{stamp}{end // 60:02d}{end % 60:02d}\n"
+            for start, end, o, h, lo, c, v in bars
+        ]
         tmp_path = csv_path.with_suffix(".csv.tmp")
         tmp_path.write_text("".join(lines))
         tmp_path.replace(csv_path)
         return csv_path
+
+    @staticmethod
+    def find_price_gaps(
+        days: Dict[date, List[Tuple[int, int, int, int, int, int]]],
+        threshold: float = 0.35,
+    ) -> List[Tuple[date, float]]:
+        """전 거래일 마지막 종가 대비 다음 거래일 첫 시가가 threshold 넘게 벌어진 날.
+
+        KRX 가격제한폭(±30%)을 넘는 벌어짐은 액면분할·병합 같은 가격 불연속일 가능성이 크다.
+        분봉은 수정주가가 아니므로 이런 날 전후를 이어 계산하면 수익률이 왜곡된다.
+
+        Returns:
+            [(거래일, 시가/전일종가 비율), ...]
+        """
+        gaps = []
+        prev_close = None
+        for day in sorted(days):
+            bars = days[day]
+            if not bars:
+                continue
+            first_open = bars[0][1]
+            if prev_close and first_open > 0:
+                ratio = first_open / prev_close
+                if ratio > 1 + threshold or ratio < 1 - threshold:
+                    gaps.append((day, round(ratio, 3)))
+            prev_close = bars[-1][4]
+        return gaps

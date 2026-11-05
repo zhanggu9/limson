@@ -653,7 +653,8 @@ async def prepare_minute_market_data(
         for gap_day, ratio in DataConverter.find_price_gaps(used_days):
             result["warnings"].append(
                 f"{symbol} {gap_day.isoformat()}: 전일 종가 대비 시가 {ratio}배 — 액면분할·병합 등 "
-                "가격 불연속이 의심됩니다. 분봉은 수정주가가 아니라 이 종목 수익률이 왜곡될 수 있습니다."
+                "가격 불연속이 의심됩니다. DB 분봉은 KIS 수정주가로 매일 맞추지만, 아직 반영되지 않았다면 "
+                "이 종목 수익률이 왜곡될 수 있습니다."
             )
 
         result["downloaded"].append(symbol)
@@ -930,7 +931,7 @@ async def run_backtest(request: BacktestRequest) -> BacktestResponse:
     if not LeanExecutor.check_docker():
         raise HTTPException(
             status_code=503,
-            detail="Docker가 실행되지 않습니다. Docker Desktop을 시작해주세요."
+            detail="LEAN을 돌리는 로컬 PC의 Docker가 꺼져 있습니다. 그 PC에서 Docker Desktop을 켜면 바로 실행됩니다 (워커 재시작 불필요)."
         )
 
     if not LeanExecutor.check_image():
@@ -1128,7 +1129,7 @@ async def run_custom_backtest(request: CustomBacktestRequest) -> BacktestRespons
     if not LeanExecutor.check_docker():
         raise HTTPException(
             status_code=503,
-            detail="Docker가 실행되지 않습니다. Docker Desktop을 시작해주세요."
+            detail="LEAN을 돌리는 로컬 PC의 Docker가 꺼져 있습니다. 그 PC에서 Docker Desktop을 켜면 바로 실행됩니다 (워커 재시작 불필요)."
         )
 
     if not LeanExecutor.check_image():

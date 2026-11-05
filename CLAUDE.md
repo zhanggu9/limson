@@ -26,6 +26,8 @@
 - **하이브리드 모드** (`BACKTEST_MODE=server|local`): EC2 t3.micro(1GB RAM)는 LEAN 이미지(압축 ~14GB, 디스크 50GB+ 필요)를 못 돌림 → 웹은 EC2, 백테스트 API+LEAN은 로컬 PC(`deploy/local_backtest_worker.sh`)에서 돌리고 SSH 역터널로 EC2 `127.0.0.1:8002`에 붙임. 끊기면 5초마다 재접속.
 - **데이터 소스**: 백테스트 OHLCV는 KIS API가 아니라 PostgreSQL(`DATABASE_URL`, 테이블명 `PG_OHLCV_TABLE`)에서 읽음. 분봉도 PostgreSQL `PG_MINUTE_TABLE`(기본 `ohlcv_minute_day`, pg-stock-api가 KIS에서 매일 수집, 2025-10-10~)에서 읽고 1~60분봉으로 묶어 LEAN에 넣음. 테이블·컬럼 식별자는 검증해서 SQL 인젝션 방지 — 이 검증을 우회하는 f-string SQL 금지.
 - **분봉 LEAN 성능**: 커스텀 분봉은 초당 약 3,500봉 + 기동 약 5초 (Python `Reader`/`OnData` 오버헤드라 파싱 최적화로는 안 빨라짐). 그래서 봉 예산 `MINUTE_BACKTEST_MAX_BARS`(150만)로 실행 시간을 nginx 900초 안에 묶음.
+- **가격 기준 = KIS 수정주가** (2026-11-05~): 일봉·분봉 모두. pg-stock-api가 일봉을 KIS 수정주가로 받고(`OHLCV_SYNC_PROVIDER=kis`), 매일 분봉 수집 뒤 `price_adjust`로 분할·병합 등이 생긴 종목의 일봉을 다시 받고 예전 분봉에 수정계수를 곱한다. 바꾸기 전 값: 일봉 `ohlcv_before_kis_adjust`, 분봉 `ohlcv_minute_day_original`, 기록 `price_adjust_log`.
+- 하이브리드 모드에서 Docker가 꺼져 있어도 워커는 API를 띄운다 (백테스트 실행만 503).
 - 불완전한 벤치마크(KOSPI) 곡선은 결과에서 제외한다.
 - nginx 단일 포트 + Basic 인증. 인증 정보·DB URL·SSH 키는 커밋하지 않는다 (`kis_devlp.yaml`에 실제 키 넣지 말 것).
 

@@ -103,9 +103,13 @@ free_remote_port() {
 }
 
 check_local_prereqs() {
-  command -v docker >/dev/null 2>&1 || die "Docker가 필요합니다."
-  docker info >/dev/null 2>&1 || die "Docker 데몬이 동작하지 않습니다."
-  docker image inspect "$LEAN_IMAGE" >/dev/null 2>&1 || die "LEAN 이미지가 없습니다: docker pull $LEAN_IMAGE"
+  # Docker는 백테스트 실행(LEAN)에만 필요하다. 꺼져 있어도 API(종목 검색·전략 목록 등)는 띄우고,
+  # 실행 요청 때 API가 "Docker 미실행" 오류를 돌려준다. Docker를 켜면 워커 재시작 없이 바로 실행된다.
+  if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+    log "경고: Docker가 꺼져 있습니다 — API는 띄우지만 백테스트 실행은 Docker Desktop을 켠 뒤에 됩니다."
+  elif ! docker image inspect "$LEAN_IMAGE" >/dev/null 2>&1; then
+    log "경고: LEAN 이미지가 없습니다 (docker pull $LEAN_IMAGE) — 백테스트 실행이 실패합니다."
+  fi
   if [[ ! -x "$BACKTEST_DIR/.venv/bin/python" ]]; then
     log "backtester Python 의존성 설치 (uv sync)"
     (cd "$BACKTEST_DIR" && uv sync --quiet)

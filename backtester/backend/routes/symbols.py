@@ -190,22 +190,74 @@ def _check_needs_update() -> bool:
 # ============================================
 
 
+# 한글 초성 (유니코드 호환 자모 순서 = 완성형 음절의 초성 인덱스 순서)
+_CHOSUNG = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ"
+_CHOSUNG_SET = frozenset(_CHOSUNG)
+
+
+def _chosung_of(ch: str) -> str:
+    """완성형 한글 음절이면 초성, 아니면 그 글자 그대로."""
+    code = ord(ch) - 0xAC00
+    if 0 <= code < 11172:
+        return _CHOSUNG[code // 588]
+    return ch
+
+
+def _normalize(text: str) -> str:
+    """대소문자·공백 차이를 무시하도록 정규화 ("sk 하이닉스" == "SK하이닉스")."""
+    return "".join(text.lower().split())
+
+
+def _match_position(name: str, query: str) -> int:
+    """name 안에서 query가 처음 맞는 위치 (없으면 -1).
+
+    query의 초성 글자(ㄱ~ㅎ)는 그 초성으로 시작하는 음절과 맞는다.
+    "ㅅㅅㅈㅈ" → 삼성전자, "삼ㅅ" → 삼성, "sk하ㅇ" → SK하이닉스
+    """
+    if not any(ch in _CHOSUNG_SET for ch in query):
+        return name.find(query)
+    width = len(query)
+    for start in range(len(name) - width + 1):
+        if all(
+            q == c or (q in _CHOSUNG_SET and _chosung_of(c) == q)
+            for q, c in zip(query, name[start:start + width])
+        ):
+            return start
+    return -1
+
+
 def search_symbols(query: str, limit: int = 20, exchange: Optional[str] = None) -> list[dict]:
-    """종목 검색 (코드 또는 이름)"""
-    query = query.lower().strip()
-    results: list[dict] = []
+    """종목 검색 (코드·이름·초성).
 
-    all_symbols = _get_all_symbols()
+    정렬: 코드 일치 → 이름 일치 → 코드 앞부분 → 이름 앞부분 → 이름 중간, 같은 순위는 이름이 짧은 순.
+    """
+    needle = _normalize(query)
+    if not needle:
+        return []
+    if len(needle) == 7 and needle[0] == "a" and needle[1:].isdigit():
+        needle = needle[1:]  # HTS 형식 "A005930"
 
-    for stock in all_symbols:
+    ranked: list[tuple[int, int, int, dict]] = []
+    for order, stock in enumerate(_get_all_symbols()):
         if exchange and stock["exchange"] != exchange.lower():
             continue
-        if query in stock["code"].lower() or query in stock["name"].lower():
-            results.append(stock)
-            if len(results) >= limit:
-                break
+        code = stock["code"].lower()
+        name = _normalize(stock["name"])
+        if code == needle:
+            rank = 0
+        elif name == needle:
+            rank = 1
+        elif code.startswith(needle):
+            rank = 2
+        else:
+            pos = _match_position(name, needle)
+            if pos < 0:
+                continue
+            rank = 3 if pos == 0 else 4
+        ranked.append((rank, len(name), order, stock))
 
-    return results
+    ranked.sort(key=lambda item: item[:3])
+    return [stock for *_, stock in ranked[:limit]]
 
 
 def get_symbol_by_code(code: str) -> Optional[dict]:
@@ -275,7 +327,7 @@ async def collect_master_files() -> CollectResult:
 
 @router.get("/search", response_model=SymbolSearchResponse)
 async def search_symbols_api(
-    q: str = Query(..., min_length=1, max_length=50, description="검색어 (종목코드 또는 종목명)"),
+    q: str = Query(..., min_length=1, max_length=50, description="검색어 (종목코드·종목명·초성)"),
     limit: int = Query(default=20, ge=1, le=50, description="최대 결과 수"),
     exchange: Optional[str] = Query(default=None, description="거래소 필터 (kospi, kosdaq)"),
 ) -> SymbolSearchResponse:
@@ -285,6 +337,7 @@ async def search_symbols_api(
         - GET /api/symbols/search?q=삼성
         - GET /api/symbols/search?q=005930
         - GET /api/symbols/search?q=에코&exchange=kosdaq
+        - GET /api/symbols/search?q=ㅅㅅㅈㅈ  (초성)
     """
     if exchange and exchange.lower() not in ("kospi", "kosdaq"):
         raise HTTPException(

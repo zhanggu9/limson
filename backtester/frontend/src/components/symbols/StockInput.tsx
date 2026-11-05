@@ -53,6 +53,7 @@ export function StockInput({ stocks, onChange }: StockInputProps) {
   const [popularStocks, setPopularStocks] = useState<StockWithName[]>([]);
   const [needsCollection, setNeedsCollection] = useState(false);
   const [recentStocks, setRecentStocks] = useState<StockWithName[]>([]);
+  const [pasteNotice, setPasteNotice] = useState<string | null>(null);
 
   useEffect(() => {
     setRecentStocks(loadRecent());
@@ -333,29 +334,68 @@ export function StockInput({ stocks, onChange }: StockInputProps) {
     }
   };
 
+  // 여러 종목 한꺼번에 추가 (이미 있는 것은 건너뜀)
+  const addMany = useCallback(
+    (items: StockWithName[]) => {
+      const fresh = items.filter((s, i) => !stocks.includes(s.code) && items.findIndex((t) => t.code === s.code) === i);
+      if (fresh.length === 0) return;
+      onChange([...stocks, ...fresh.map((s) => s.code)]);
+      const named = Object.fromEntries(fresh.filter((s) => s.name).map((s) => [s.code, s.name]));
+      if (Object.keys(named).length > 0) setStockNames((prev) => ({ ...prev, ...named }));
+      rememberStocks(fresh);
+    },
+    [stocks, onChange, rememberStocks]
+  );
+
+  // 붙여넣기
+  // - 6자리 코드가 들어 있으면 코드를 모두 추가 ("005930, 000660", 엑셀 열, "A005930 삼성전자" 줄 등)
+  // - 쉼표·줄바꿈·탭으로 나뉜 종목명 여러 개면 이름이 정확히 같은 종목을 찾아 추가
+  // - 종목명 하나면 기본 붙여넣기 → 그대로 검색
   const handlePaste = useCallback(
     (e: React.ClipboardEvent) => {
-      e.preventDefault();
       const pastedText = e.clipboardData.getData("text");
-      const codes = pastedText
-        .split(/[,\s]+/)
-        .filter((c) => c.trim().length === 6 && /^\d+$/.test(c.trim()))
-        .map((c) => c.trim());
-      const newCodes = codes.filter((c) => !stocks.includes(c));
-      if (newCodes.length === 0) return;
+      const codes = [...pastedText.matchAll(/(?<![0-9A-Za-z])A?(\d{6})(?![0-9A-Za-z])/g)].map((m) => m[1]);
 
-      const uniqueCodes = [...new Set([...stocks, ...newCodes])];
-      onChange(uniqueCodes);
+      if (codes.length > 0) {
+        e.preventDefault();
+        setPasteNotice(null);
+        const newCodes = [...new Set(codes)].filter((c) => !stocks.includes(c));
+        if (newCodes.length === 0) return;
+        onChange([...stocks, ...newCodes]);
+        resolveMultipleNames(newCodes).then((resolved) => {
+          if (Object.keys(resolved).length > 0) {
+            setStockNames((prev) => ({ ...prev, ...resolved }));
+          }
+          rememberStocks(newCodes.map((code) => ({ code, name: resolved[code] ?? "" })));
+        });
+        return;
+      }
 
-      // 붙여넣기한 종목 이름 조회
-      resolveMultipleNames(newCodes).then((resolved) => {
-        if (Object.keys(resolved).length > 0) {
-          setStockNames((prev) => ({ ...prev, ...resolved }));
-        }
-        rememberStocks(newCodes.map((code) => ({ code, name: resolved[code] ?? "" })));
+      const names = pastedText.split(/[,;\t\r\n]+/).map((n) => n.trim()).filter(Boolean).slice(0, 50);
+      if (names.length <= 1) {
+        setPasteNotice(null);
+        return; // 기본 붙여넣기 → 입력칸에 들어가 검색됨
+      }
+
+      e.preventDefault();
+      const squash = (t: string) => t.toLowerCase().replace(/\s+/g, "");
+      Promise.all(
+        names.map(async (name) => {
+          try {
+            const { items } = await searchSymbols(name, 5);
+            const hit = items.find((s) => squash(s.name) === squash(name));
+            return { name, hit };
+          } catch {
+            return { name, hit: undefined };
+          }
+        })
+      ).then((found) => {
+        addMany(found.flatMap((f) => (f.hit ? [{ code: f.hit.code, name: f.hit.name }] : [])));
+        const missing = found.filter((f) => !f.hit).map((f) => f.name);
+        setPasteNotice(missing.length > 0 ? `찾지 못한 종목: ${missing.join(", ")}` : null);
       });
     },
-    [stocks, onChange, resolveMultipleNames, rememberStocks]
+    [stocks, onChange, resolveMultipleNames, rememberStocks, addMany]
   );
 
   const getStockName = (code: string): string => {
@@ -388,7 +428,7 @@ export function StockInput({ stocks, onChange }: StockInputProps) {
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             onFocus={() => query && results.length > 0 && setIsOpen(true)}
-            placeholder="종목명 또는 코드 검색 (예: 삼성전자, 005930)"
+            placeholder="종목명·코드·초성 검색 (예: 삼성전자, 005930, ㅅㅅㅈㅈ)"
             className="w-full pl-10 pr-10 py-3 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 focus:ring-2 focus:ring-primary focus:border-transparent"
           />
           {query && !isLoading && (
@@ -447,6 +487,13 @@ export function StockInput({ stocks, onChange }: StockInputProps) {
           </div>
         )}
       </div>
+
+      <p className="-mt-1 text-[11px] text-slate-400">
+        여러 종목 붙여넣기 가능: 코드(005930, 000660 / 엑셀 열) 또는 쉼표·줄바꿈으로 나눈 종목명
+      </p>
+      {pasteNotice && (
+        <p className="text-xs text-amber-600 dark:text-amber-400">{pasteNotice}</p>
+      )}
 
       {/* Selected Stocks */}
       {stocks.length > 0 && (

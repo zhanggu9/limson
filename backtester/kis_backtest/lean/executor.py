@@ -5,7 +5,9 @@ Docker 컨테이너로 Lean 백테스트 직접 실행. (Lean CLI 불필요)
 
 import json
 import logging
+import re
 import subprocess
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -195,8 +197,11 @@ class LeanExecutor:
         config_path.write_text(json.dumps(lean_config, indent=2))
         
         # Docker 명령어 구성
+        # 타임아웃 때 docker 클라이언트만 죽으면 컨테이너는 계속 돌므로, 이름을 붙여 직접 멈춘다
+        container_name = "lean-" + re.sub(r"[^A-Za-z0-9_.-]", "-", project.run_id)[:80] + "-" + uuid.uuid4().hex[:6]
         cmd = [
             "docker", "run", "--rm",
+            "--name", container_name,
             "--label", "com.open-trading-api.component=backtester-lean",
             "-v", f"{project_path}:/Algorithm:ro",
             "-v", f"{data_path}:/Data:ro",
@@ -240,6 +245,7 @@ class LeanExecutor:
             return run
             
         except subprocess.TimeoutExpired:
+            cls._kill_container(container_name)
             error_msg = f"Lean 백테스트 타임아웃 ({timeout}초)"
             logger.error(f"[Lean] {error_msg}")
             raise RuntimeError(error_msg)
@@ -249,6 +255,15 @@ class LeanExecutor:
             logger.error(f"[Lean] {error_msg}")
             raise RuntimeError(error_msg)
     
+    @staticmethod
+    def _kill_container(name: str) -> None:
+        """타임아웃된 LEAN 컨테이너를 멈춘다 (--rm 이라 멈추면 자동 삭제)."""
+        try:
+            subprocess.run(["docker", "kill", name], capture_output=True, text=True, timeout=30)
+            logger.warning(f"[Lean] 타임아웃 컨테이너 정지: {name}")
+        except (OSError, subprocess.SubprocessError) as e:
+            logger.error(f"[Lean] 컨테이너 정지 실패 ({name}): {e}")
+
     @classmethod
     def pull_image(cls) -> bool:
         """Lean Docker 이미지 다운로드"""

@@ -254,7 +254,7 @@ class LeanCodeGenerator:
 
         # 커스텀 지표는 .Update() 루프에서 제외 (정수/부동소수 카운터로 관리)
         # beta/alpha는 self.B()/self.A()로 등록 → Lean 프레임워크가 자동 업데이트
-        custom_ids = {"consecutive", "disparity", "volatility_ind", "change", "returns", "beta", "alpha"}
+        custom_ids = {"consecutive", "disparity", "volatility_ind", "change", "returns", "beta", "alpha", "opening_range"}
 
         for ind in self._unique_indicators:
             if ind.id in custom_ids:
@@ -409,6 +409,13 @@ class LeanCodeGenerator:
         except SyntaxError as e:
             raise ValueError(f"생성된 Lean 코드 구문 오류 (line {e.lineno}): {e.msg}")
         return code
+
+    @staticmethod
+    def _opening_range_minutes(indicator: IndicatorSchema) -> int:
+        minutes = int(indicator.params.get("minutes", 30))
+        if not 1 <= minutes <= 390:
+            raise ValueError(f"opening_range minutes는 1~390 사이여야 합니다: {minutes}")
+        return minutes
 
     def warmup_bars(self) -> int:
         """지표·캔들스틱이 준비되는 데 필요한 봉 수 (분봉 워밍업 데이터 범위 계산용)."""
@@ -858,6 +865,16 @@ class Algorithm(QCAlgorithm):
                 max_warmup = max(max_warmup, 2)
                 continue
 
+            if indicator.id == "opening_range":
+                if self.config.resolution != "minute":
+                    raise ValueError("opening_range(시가 범위) 지표는 분봉 백테스트에서만 쓸 수 있습니다.")
+                minutes = self._opening_range_minutes(indicator)
+                lines.append(
+                    f"            self.indicators[symbol][{alias!r}] = {{'day': None}}"
+                    f"  # opening range: 장 시작 후 {minutes}분 고가·저가"
+                )
+                continue
+
             if indicator.id == "disparity":
                 alias = indicator.alias or indicator.id
                 period = indicator.params.get("period", 20)
@@ -977,6 +994,9 @@ class Algorithm(QCAlgorithm):
         # 지표 목록에서 수집
         for ind in self.schema.indicators:
             if ind.id not in PRICE_FIELDS:
+                # opening_range는 단일 값이 없고 조건이 쓰는 high/low만 꺼낸다
+                if ind.id == "opening_range" and (ind.output or "value") == "value":
+                    continue
                 outputs.add((ind.alias or ind.id, ind.output or "value"))
         
         # 조건에서 수집
@@ -1060,7 +1080,30 @@ class Algorithm(QCAlgorithm):
                 lines.append(f"            {var_alias}_roc_val = self.indicators[symbol][{f'{alias}_roc'!r}].Current.Value")
                 lines.append(f"            self.indicators[symbol][{alias!r}] = {var_alias}_roc_val * 100")
 
-        if custom_indicators:
+        # opening_range: 그날 첫 봉 시작 시각부터 N분 동안의 고가·저가.
+        # 범위가 끝나는 봉까지 모은 뒤에야 high/low를 공개하고, 그 전에는 ±inf로 둬서 돌파 신호가 나지 않게 한다.
+        # 봉 주기가 N분으로 나누어떨어지지 않으면 범위 끝을 넘는 첫 봉까지 포함한다.
+        seen_ranges = set()
+        for ind in self.schema.indicators:
+            alias = ind.alias or ind.id
+            if ind.id != "opening_range" or alias in seen_ranges:
+                continue
+            seen_ranges.add(alias)
+            minutes = self._opening_range_minutes(ind)
+            var_alias = self._get_sanitized_alias(alias)
+            state = f"{var_alias}_state"
+            lines.append(f"            # opening_range 장 시작 후 {minutes}분 고가·저가")
+            lines.append(f"            {state} = self.indicators[symbol][{alias!r}]")
+            lines.append(f"            if {state}['day'] != bar.Time.date():")
+            lines.append(f"                {state}.update(day=bar.Time.date(), end=bar.Time.hour * 60 + bar.Time.minute + {minutes},")
+            lines.append(f"                    range_high=float(bar.High), range_low=float(bar.Low), high=float('inf'), low=float('-inf'), ready=False)")
+            lines.append(f"            elif not {state}['ready']:")
+            lines.append(f"                {state}['range_high'] = max({state}['range_high'], float(bar.High))")
+            lines.append(f"                {state}['range_low'] = min({state}['range_low'], float(bar.Low))")
+            lines.append(f"            if not {state}['ready'] and bar.EndTime.hour * 60 + bar.EndTime.minute >= {state}['end']:")
+            lines.append(f"                {state}.update(high={state}['range_high'], low={state}['range_low'], ready=True)")
+
+        if custom_indicators or seen_ranges:
             lines.append("")
         
         # 조건에서 사용되는 모든 지표+output 조합 수집
@@ -1088,6 +1131,11 @@ class Algorithm(QCAlgorithm):
             # 커스텀 지표는 저장된 값 직접 사용
             if indicator_id in ("consecutive", "disparity", "volatility_ind", "change", "returns"):
                 lines.append(f"            {var_name} = self.indicators[symbol][{alias!r}]")
+                continue
+            if indicator_id == "opening_range":
+                if output not in ("high", "low"):
+                    raise ValueError(f"opening_range 출력은 high 또는 low 입니다: {output!r}")
+                lines.append(f"            {var_name} = self.indicators[symbol][{alias!r}][{output!r}]")
                 continue
 
             # 지표 정보 가져오기

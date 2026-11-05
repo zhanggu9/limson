@@ -298,9 +298,9 @@ export default function BacktestPage() {
   const loadLeanTestPreset = useCallback(() => {
     setSelectedId("sma_crossover");
     setImportedYaml(null);
-    setSelectedStocks(["000020"]);
+    setSelectedStocks(["000660"]);
     setResolution("daily");
-    setStartDate("2025-01-02");
+    setStartDate("2025-10-10");
     setEndDate("2026-10-14");
     setInitialCapital(100_000_000);
     setCommissionRate(0.015);
@@ -398,6 +398,19 @@ export default function BacktestPage() {
       setStartDate(earliest && monthAgo < earliest ? earliest : monthAgo);
     }
   }, [startDate, endDate, minuteLimits]);
+
+  // 당일 매매 전략(tags에 "intraday", 예: ORB)은 고르는 즉시 분봉 5분 + 15:15 장마감 청산으로 맞춘다 (바꾼 뒤 직접 수정 가능).
+  const handleStrategySelect = useCallback((id: string | null) => {
+    setSelectedId(id);
+    setImportedYaml(null);
+    const strategy = allStrategies.find((s) => s.id === id);
+    if (strategy?.tags?.includes("intraday")) {
+      handleResolutionChange("minute");
+      setBarMinutes(5);
+      setIntradayExitOn(true);
+      setIntradayExitTime("15:15");
+    }
+  }, [allStrategies, handleResolutionChange]);
 
   // 분봉 규모 추정: 종목 수 × 평일 수 × 하루 봉 수 (서버도 같은 기준으로 한도를 넘으면 400)
   const minuteEstimate = useMemo(() => {
@@ -565,81 +578,85 @@ export default function BacktestPage() {
       </div>
       {presetApplied && (
         <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-200">
-          테스트 설정이 적용되었습니다. 종목 000020, SMA 크로스오버, 2025-01-02~2026-10-14 기간으로 백테스트 실행 버튼을 누르세요.
+          테스트 설정이 적용되었습니다. SK하이닉스(000660), SMA 크로스오버, 2025-10-10~2026-10-14 기간으로 백테스트 실행 버튼을 누르세요.
         </div>
       )}
 
-      {/* 2컬럼 레이아웃 */}
-      <div className="grid lg:grid-cols-3 gap-6">
-        {/* 왼쪽: 설정 */}
-        <div className="space-y-4">
-          {/* 파일 드롭존 */}
-          <FileDropZone
-            onFileSelect={handleImport}
-            className="min-h-[120px]"
-          />
+      {/* 위: 설정 (가로 배치) / 아래: 결과 (전체 폭) */}
+      <div className="space-y-6">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 items-start">
+          {/* 1열: 파일·전략·파라미터 */}
+          <div className="space-y-4">
+            {/* 파일 드롭존 */}
+            <FileDropZone
+              onFileSelect={handleImport}
+              className="min-h-[120px]"
+            />
 
-          {/* 또는 전략 선택 */}
-          <div className="card">
-            <h3 className="font-semibold text-slate-900 dark:text-white mb-3 flex items-center gap-2">
-              <Zap className="w-4 h-4 text-kis-blue" />
-              전략 선택
-            </h3>
-            {isLoading ? (
-              <Loader2 className="w-5 h-5 animate-spin text-slate-400 mx-auto" />
-            ) : (
-              <select
-                value={selectedId || ""}
-                onChange={(e) => {
-                  setSelectedId(e.target.value || null);
-                  setImportedYaml(null);
-                }}
-                className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm"
-              >
-                <option value="">-- 전략 선택 ({allStrategies.length}개) --</option>
-                {allStrategies.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-            )}
-            {importedYaml && (
-              <div className="mt-2 px-2 py-1 bg-amber-100 text-amber-700 rounded text-xs">
-                Import된 파일 사용 중
-              </div>
-            )}
+            {/* 또는 전략 선택 */}
+            <div className="card">
+              <h3 className="font-semibold text-slate-900 dark:text-white mb-3 flex items-center gap-2">
+                <Zap className="w-4 h-4 text-kis-blue" />
+                전략 선택
+              </h3>
+              {isLoading ? (
+                <Loader2 className="w-5 h-5 animate-spin text-slate-400 mx-auto" />
+              ) : (
+                <select
+                  value={selectedId || ""}
+                  onChange={(e) => handleStrategySelect(e.target.value || null)}
+                  className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm"
+                >
+                  <option value="">-- 전략 선택 ({allStrategies.length}개) --</option>
+                  {allStrategies.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {importedYaml && (
+                <div className="mt-2 px-2 py-1 bg-amber-100 text-amber-700 rounded text-xs">
+                  Import된 파일 사용 중
+                </div>
+              )}
             
-            {/* 전략 설명 */}
-            {selectedStrategy && (
-              <p className="mt-2 text-xs text-slate-500">
-                {selectedStrategy.description}
-              </p>
+              {/* 전략 설명 */}
+              {selectedStrategy && (
+                <p className="mt-2 text-xs text-slate-500">
+                  {selectedStrategy.description}
+                </p>
+              )}
+              {selectedStrategy?.tags?.includes("intraday") && (
+                <p className="mt-1 text-xs text-kis-blue">
+                  당일 매매 전략이라 분봉 5분 · 15:15 장마감 청산으로 맞췄습니다.
+                </p>
+              )}
+            </div>
+
+            {/* 파라미터 설정 (전략 선택 시만 표시) */}
+            {selectedStrategy?.params && Object.keys(selectedStrategy.params).length > 0 && (
+              <div className="card">
+                <h3 className="font-semibold text-slate-900 dark:text-white mb-3 flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-kis-blue" />
+                  파라미터 설정
+                </h3>
+                <div className="space-y-4">
+                  {Object.entries(selectedStrategy.params).map(([name, def]) => (
+                    <ParamSlider
+                      key={name}
+                      name={name}
+                      definition={def}
+                      value={paramOverrides[name] ?? def.default}
+                      onChange={(value) => handleParamChange(name, value)}
+                    />
+                  ))}
+                </div>
+              </div>
             )}
           </div>
 
-          {/* 파라미터 설정 (전략 선택 시만 표시) */}
-          {selectedStrategy?.params && Object.keys(selectedStrategy.params).length > 0 && (
-            <div className="card">
-              <h3 className="font-semibold text-slate-900 dark:text-white mb-3 flex items-center gap-2">
-                <Activity className="w-4 h-4 text-kis-blue" />
-                파라미터 설정
-              </h3>
-              <div className="space-y-4">
-                {Object.entries(selectedStrategy.params).map(([name, def]) => (
-                  <ParamSlider
-                    key={name}
-                    name={name}
-                    definition={def}
-                    value={paramOverrides[name] ?? def.default}
-                    onChange={(value) => handleParamChange(name, value)}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* 종목 선택 */}
+          {/* 2열: 종목 선택 */}
           <div className="card">
             <h3 className="font-semibold text-slate-900 dark:text-white mb-3 flex items-center gap-2">
               <Target className="w-4 h-4 text-kis-blue" />
@@ -648,7 +665,7 @@ export default function BacktestPage() {
             <StockInput stocks={selectedStocks} onChange={setSelectedStocks} />
           </div>
 
-          {/* 기간 설정 */}
+          {/* 3열: 기간 설정 */}
           <div className="card">
             <h3 className="font-semibold text-slate-900 dark:text-white mb-3 flex items-center gap-2">
               <Calendar className="w-4 h-4 text-kis-blue" />
@@ -797,78 +814,80 @@ export default function BacktestPage() {
             </div>
           </div>
 
-          {/* 거래 비용 설정 */}
-          <div className="card">
-            <h3 className="font-semibold text-slate-900 dark:text-white mb-3 flex items-center gap-2">
-              <Percent className="w-4 h-4 text-kis-blue" />
-              거래 비용
-            </h3>
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-xs text-slate-500 mb-1 block">수수료 (%)</label>
-                  <input
-                    type="number"
-                    step="0.001"
-                    value={commissionRate}
-                    onChange={(e) => setCommissionRate(Number(e.target.value))}
-                    className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-sm"
-                  />
+          {/* 4열: 거래 비용 + 실행 */}
+          <div className="space-y-4">
+            <div className="card">
+              <h3 className="font-semibold text-slate-900 dark:text-white mb-3 flex items-center gap-2">
+                <Percent className="w-4 h-4 text-kis-blue" />
+                거래 비용
+              </h3>
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs text-slate-500 mb-1 block">수수료 (%)</label>
+                    <input
+                      type="number"
+                      step="0.001"
+                      value={commissionRate}
+                      onChange={(e) => setCommissionRate(Number(e.target.value))}
+                      className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-500 mb-1 block">거래세 (%)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={taxRate}
+                      onChange={(e) => setTaxRate(Number(e.target.value))}
+                      className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-sm"
+                    />
+                  </div>
                 </div>
                 <div>
-                  <label className="text-xs text-slate-500 mb-1 block">거래세 (%)</label>
+                  <label className="text-xs text-slate-500 mb-1 block">슬리피지 (%)</label>
                   <input
                     type="number"
                     step="0.01"
-                    value={taxRate}
-                    onChange={(e) => setTaxRate(Number(e.target.value))}
+                    value={slippage}
+                    onChange={(e) => setSlippage(Number(e.target.value))}
                     className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-sm"
                   />
                 </div>
+                <p className="text-xs text-slate-400">
+                  * 수수료: 매수/매도 시 부과, 거래세: 매도 시 부과
+                </p>
               </div>
-              <div>
-                <label className="text-xs text-slate-500 mb-1 block">슬리피지 (%)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={slippage}
-                  onChange={(e) => setSlippage(Number(e.target.value))}
-                  className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-sm"
-                />
-              </div>
-              <p className="text-xs text-slate-400">
-                * 수수료: 매수/매도 시 부과, 거래세: 매도 시 부과
-              </p>
             </div>
-          </div>
 
-          {/* 실행 버튼 */}
-          <button
-            onClick={handleRun}
-            disabled={!canRun || isRunning}
-            className={cn(
-              "w-full flex items-center justify-center gap-2 py-3 rounded-xl font-bold transition-all",
-              canRun && !isRunning
-                ? "bg-kis-blue hover:bg-kis-blue-dark text-white shadow-lg"
-                : "bg-slate-200 text-slate-400 cursor-not-allowed"
-            )}
-          >
-            {isRunning ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin" />
-                실행 중...
-              </>
-            ) : (
-              <>
-                <Play className="w-5 h-5" />
-                백테스트 실행
-              </>
-            )}
-          </button>
+            {/* 실행 버튼 */}
+            <button
+              onClick={handleRun}
+              disabled={!canRun || isRunning}
+              className={cn(
+                "w-full flex items-center justify-center gap-2 py-3 rounded-xl font-bold transition-all",
+                canRun && !isRunning
+                  ? "bg-kis-blue hover:bg-kis-blue-dark text-white shadow-lg"
+                  : "bg-slate-200 text-slate-400 cursor-not-allowed"
+              )}
+            >
+              {isRunning ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  실행 중...
+                </>
+              ) : (
+                <>
+                  <Play className="w-5 h-5" />
+                  백테스트 실행
+                </>
+              )}
+            </button>
+          </div>
         </div>
 
-        {/* 오른쪽: 결과 */}
-        <div className="lg:col-span-2 space-y-4">
+        {/* 결과 */}
+        <div className="space-y-4">
           {error && (
             <div className="card bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800">
               <div className="flex items-start gap-3">

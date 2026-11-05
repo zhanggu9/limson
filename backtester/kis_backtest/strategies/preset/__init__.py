@@ -1,6 +1,6 @@
 """Preset Strategies.
 
-Expert Sample 10종 전략 정의.
+Expert Sample 10종 + 분봉 전용 ORB 전략 정의.
 모든 전략은 StrategyRegistry에 자동 등록됩니다.
 """
 
@@ -38,6 +38,9 @@ from kis_backtest.strategies.preset.short_term_reversal import ShortTermReversal
 # 10. 추세 필터 + 시그널
 from kis_backtest.strategies.preset.trend_filter_signal import TrendFilterSignalStrategy
 
+# 11. 시가 범위 돌파 (ORB, 분봉 전용)
+from kis_backtest.strategies.preset.opening_range_breakout import OpeningRangeBreakoutStrategy
+
 
 __all__ = [
     "SMACrossoverStrategy",
@@ -50,4 +53,5 @@ __all__ = [
     "VolatilityBreakoutStrategy",
     "ShortTermReversalStrategy",
     "TrendFilterSignalStrategy",
+    "OpeningRangeBreakoutStrategy",
 ]

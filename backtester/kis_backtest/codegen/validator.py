@@ -162,6 +162,12 @@ class IndicatorValidator:
             "warning": "returns는 RateOfChangePercent 기반입니다.",
             "is_custom": True,
         },
+        "opening_range": {
+            "params": ["minutes"],
+            "init_template": "{}",
+            "warning": "opening_range는 분봉 전용 커스텀 계산입니다. output='high' 또는 'low'.",
+            "is_custom": True,
+        },
     }
     
     @classmethod

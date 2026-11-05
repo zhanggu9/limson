@@ -385,7 +385,7 @@ bash scripts/start_mcp.sh    # http://127.0.0.1:3846/mcp
 
 ---
 
-## 10개 프리셋 전략
+## 프리셋 전략 (10종 + 분봉 전용 ORB)
 
 | ID | 이름 | 카테고리 | 설명 |
 |----|------|----------|------|
@@ -399,6 +399,9 @@ bash scripts/start_mcp.sh    # http://127.0.0.1:3846/mcp
 | `volatility_breakout` | 변동성 축소 후 확장 | volatility | 변동성 최저 후 돌파 매수 |
 | `short_term_reversal` | 단기 반전 | mean_reversion | 과매도 구간 반등 매수 |
 | `trend_filter_signal` | 추세 필터 + 시그널 | trend | 추세 방향 확인 후 진입 |
+| `opening_range_breakout` | 시가 범위 돌파 (ORB) | momentum | **분봉 전용.** 장 시작 후 N분(기본 30) 고가 돌파 시 매수, 저가 이탈·손절·익절 시 매도. 화면에서 고르면 분봉 5분 + 15:15 장마감 청산으로 맞춰짐 |
+
+ORB는 내장 커스텀 지표 `opening_range`(파라미터 `minutes`, 출력 `high`/`low`)를 씁니다. 그날 첫 봉의 시작 시각부터 N분 동안의 고가·저가를 모으고, 범위가 완성되기 전에는 신호를 내지 않습니다(수능일처럼 늦게 여는 날도 첫 봉 기준). YAML 전략에서도 `opening_range`를 쓸 수 있지만 분봉 백테스트에서만 동작합니다.
 
 ---
 

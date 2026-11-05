@@ -1050,6 +1050,16 @@ INDICATOR_REGISTRY: Dict[str, IndicatorInfo] = {
         init_template="{name}_roc = RateOfChangePercent({period})",
         description="N일 수익률",
     ),
+    "opening_range": IndicatorInfo(
+        id="opening_range",
+        name="Opening Range",
+        lean_class="",
+        params=["minutes"],
+        value_template="{name}['high']",
+        outputs={"high": "{name}['high']", "low": "{name}['low']"},
+        init_template="{name} = {{}}  # 장 시작 후 {minutes}분 고가·저가",
+        description="장 시작 후 N분 고가·저가 (분봉 전용, 범위가 완성되기 전에는 신호 없음)",
+    ),
 }
 
 

@@ -1,11 +1,34 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { X, Search, Loader2, AlertTriangle } from "lucide-react";
+import { X, Search, Loader2, AlertTriangle, History } from "lucide-react";
 import { searchSymbols, getSymbolByCode, getMasterStatus } from "@/lib/api/symbols";
 import type { Symbol } from "@/types/symbols";
 
 const STORAGE_KEY = "kis_backtest_stocks";
+// 검색해서 추가했던 종목 이력 (브라우저 localStorage, 최근 것이 앞)
+const RECENT_KEY = "kis_backtest_recent_stocks";
+const RECENT_LIMIT = 10;
+
+function loadRecent(): StockWithName[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(RECENT_KEY) || "[]");
+    return Array.isArray(parsed)
+      ? parsed.filter((s) => s && typeof s.code === "string").slice(0, RECENT_LIMIT)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecent(items: StockWithName[]) {
+  try {
+    if (items.length > 0) localStorage.setItem(RECENT_KEY, JSON.stringify(items));
+    else localStorage.removeItem(RECENT_KEY);
+  } catch {
+    // 저장 공간이 막힌 브라우저(사생활 보호 모드 등)는 이력 없이 동작
+  }
+}
 
 interface StockWithName {
   code: string;
@@ -29,6 +52,37 @@ export function StockInput({ stocks, onChange }: StockInputProps) {
   const [stockNames, setStockNames] = useState<Record<string, string>>({});
   const [popularStocks, setPopularStocks] = useState<StockWithName[]>([]);
   const [needsCollection, setNeedsCollection] = useState(false);
+  const [recentStocks, setRecentStocks] = useState<StockWithName[]>([]);
+
+  useEffect(() => {
+    setRecentStocks(loadRecent());
+  }, []);
+
+  // 이력 맨 앞에 추가 (같은 종목은 앞으로 옮기고, 이름이 없으면 기존 이름 유지)
+  const rememberStocks = useCallback((items: StockWithName[]) => {
+    if (items.length === 0) return;
+    setRecentStocks((prev) => {
+      const known = new Map(prev.map((s) => [s.code, s.name]));
+      const added = items.map((s) => ({ code: s.code, name: s.name || known.get(s.code) || "" }));
+      const codes = new Set(added.map((s) => s.code));
+      const next = [...added, ...prev.filter((s) => !codes.has(s.code))].slice(0, RECENT_LIMIT);
+      saveRecent(next);
+      return next;
+    });
+  }, []);
+
+  const forgetStock = useCallback((code: string) => {
+    setRecentStocks((prev) => {
+      const next = prev.filter((s) => s.code !== code);
+      saveRecent(next);
+      return next;
+    });
+  }, []);
+
+  const clearRecent = useCallback(() => {
+    setRecentStocks([]);
+    saveRecent([]);
+  }, []);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -202,11 +256,12 @@ export function StockInput({ stocks, onChange }: StockInputProps) {
           [symbol.code]: symbol.name,
         }));
       }
+      rememberStocks([{ code: symbol.code, name: symbol.name }]);
       setQuery("");
       setResults([]);
       setIsOpen(false);
     },
-    [stocks, onChange]
+    [stocks, onChange, rememberStocks]
   );
 
   const addStockByCode = useCallback(
@@ -214,11 +269,13 @@ export function StockInput({ stocks, onChange }: StockInputProps) {
       const trimmed = code.trim();
       if (trimmed.length === 6 && /^\d+$/.test(trimmed) && !stocks.includes(trimmed)) {
         onChange([...stocks, trimmed]);
+        setQuery("");
         if (name) {
           setStockNames((prev) => ({
             ...prev,
             [trimmed]: name,
           }));
+          rememberStocks([{ code: trimmed, name }]);
         } else {
           // 이름 없으면 마스터파일에서 조회
           const resolved = await resolveStockName(trimmed);
@@ -228,11 +285,11 @@ export function StockInput({ stocks, onChange }: StockInputProps) {
               [trimmed]: resolved,
             }));
           }
+          rememberStocks([{ code: trimmed, name: resolved ?? "" }]);
         }
-        setQuery("");
       }
     },
-    [stocks, onChange, resolveStockName]
+    [stocks, onChange, resolveStockName, rememberStocks]
   );
 
   const removeStock = useCallback(
@@ -295,9 +352,10 @@ export function StockInput({ stocks, onChange }: StockInputProps) {
         if (Object.keys(resolved).length > 0) {
           setStockNames((prev) => ({ ...prev, ...resolved }));
         }
+        rememberStocks(newCodes.map((code) => ({ code, name: resolved[code] ?? "" })));
       });
     },
-    [stocks, onChange, resolveMultipleNames]
+    [stocks, onChange, resolveMultipleNames, rememberStocks]
   );
 
   const getStockName = (code: string): string => {
@@ -412,6 +470,58 @@ export function StockInput({ stocks, onChange }: StockInputProps) {
               </span>
             );
           })}
+        </div>
+      )}
+
+      {/* 최근 검색 (localStorage) */}
+      {recentStocks.length > 0 && (
+        <div className="pt-1">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs text-slate-500 flex items-center gap-1">
+              <History className="w-3.5 h-3.5" />
+              최근 검색
+            </p>
+            <button
+              type="button"
+              onClick={clearRecent}
+              className="text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+            >
+              전체 지우기
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {recentStocks.map((stock) => {
+              const added = stocks.includes(stock.code);
+              return (
+                <span
+                  key={stock.code}
+                  className={`inline-flex items-center rounded-full border text-sm transition-colors ${
+                    added
+                      ? "border-primary/30 text-primary/60"
+                      : "border-slate-200 dark:border-slate-700 hover:border-primary hover:text-primary"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => addStockByCode(stock.code, stock.name || undefined)}
+                    disabled={added}
+                    className="pl-3 pr-1 py-1 disabled:cursor-default"
+                    title={added ? "이미 추가됨" : `${stock.code} 추가`}
+                  >
+                    {stock.name || stock.code}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => forgetStock(stock.code)}
+                    className="pr-2 pl-0.5 py-1 text-slate-400 hover:text-slate-600"
+                    aria-label={`${stock.name || stock.code} 이력 삭제`}
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              );
+            })}
+          </div>
         </div>
       )}
 

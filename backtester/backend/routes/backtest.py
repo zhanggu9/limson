@@ -144,6 +144,79 @@ def _load_benchmark_curve(
         return None
 
 
+# 차트에 겹쳐 그릴 종목 가격선 최대 개수 (응답 크기 제한)
+SYMBOL_CURVE_LIMIT = 20
+
+
+def _read_close(line: str) -> Optional[float]:
+    """LEAN CSV 한 줄(YYYYMMDD[HHMM],o,h,l,c,v[,end])에서 종가를 꺼낸다."""
+    parts = line.strip().split(",")
+    if len(parts) < 5:
+        return None
+    try:
+        return float(parts[4])
+    except ValueError:
+        return None
+
+
+def _load_symbol_curves(
+    workspace: Path,
+    symbols: List[str],
+    start_date: str,
+    end_date: str,
+    resolution: str = "daily",
+    bar_minutes: int = 1,
+) -> Optional[Dict[str, Dict[str, float]]]:
+    """종목별 일별 종가 곡선 {종목: {YYYY-MM-DD: 종가}}.
+
+    LEAN이 실제로 읽은 워크스페이스 CSV에서 읽어 거래 가격과 기준을 맞춘다.
+    - 일봉: data/equity/krx/daily/{종목}.csv
+    - 분봉: data/equity/krx/minute/{N}m/{종목}/{YYYYMMDD}.csv 의 마지막 봉 종가
+    """
+    try:
+        req_start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        req_end = datetime.strptime(end_date, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+    equity_dir = workspace / "data" / "equity" / "krx"
+    curves: Dict[str, Dict[str, float]] = {}
+    for symbol in symbols[:SYMBOL_CURVE_LIMIT]:
+        closes: Dict[str, float] = {}
+        try:
+            if resolution == "minute":
+                day_dir = equity_dir / "minute" / f"{bar_minutes}m" / symbol.lower()
+                for day_file in sorted(day_dir.glob("*.csv")):
+                    try:
+                        day = datetime.strptime(day_file.stem, "%Y%m%d").date()
+                    except ValueError:
+                        continue
+                    if not req_start <= day <= req_end:
+                        continue
+                    lines = day_file.read_text().strip().splitlines()
+                    close = _read_close(lines[-1]) if lines else None
+                    if close is not None:
+                        closes[day.isoformat()] = close
+            else:
+                csv_path = equity_dir / "daily" / f"{symbol.lower()}.csv"
+                with open(csv_path, "r") as f:
+                    for line in f:
+                        try:
+                            day = datetime.strptime(line[:8], "%Y%m%d").date()
+                        except ValueError:
+                            continue
+                        close = _read_close(line)
+                        if req_start <= day <= req_end and close is not None:
+                            closes[day.isoformat()] = close
+        except OSError as e:
+            logger.warning(f"[SymbolCurve] {symbol} 로드 실패: {type(e).__name__}")
+            continue
+        if closes:
+            curves[symbol] = closes
+
+    return curves or None
+
+
 def _lean_run_to_api_response(
     lean_run: LeanRun,
     strategy_name: str,
@@ -261,6 +334,10 @@ def _lean_run_to_api_response(
         },
         "equity_curve": equity_curve,
         "benchmark_curve": _load_benchmark_curve(workspace, start_date, end_date) if workspace else None,
+        "symbol_curves": (
+            _load_symbol_curves(workspace, symbols, start_date, end_date, resolution, bar_minutes)
+            if workspace else None
+        ),
         "trades_count": len(trades),
         "trades": trades,
     }

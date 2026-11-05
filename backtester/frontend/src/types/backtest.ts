@@ -118,6 +118,7 @@ export interface BacktestResult {
   metrics: PerformanceMetrics;
   equity_curve: Record<string, number>;
   benchmark_curve?: Record<string, number>;  // KOSPI 수익률 커브 (%)
+  symbol_curves?: Record<string, Record<string, number>> | null;  // 종목별 일별 종가 {종목: {날짜: 종가}}
   trades_count: number;
   trades?: TradeInfo[];  // 거래 내역
 }

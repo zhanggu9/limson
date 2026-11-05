@@ -18,7 +18,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { cn, formatCurrency, formatPercent } from "@/lib/utils";
-import { getMinuteCoverage, listStrategies, runBacktest, runCustomBacktest } from "@/lib/api";
+import { getMinuteCoverage, getSymbolByCode, listStrategies, runBacktest, runCustomBacktest } from "@/lib/api";
 import { FileDropZone } from "@/components/file";
 import { StockInput } from "@/components/symbols";
 import { EquityChart } from "@/components/backtest";
@@ -31,6 +31,14 @@ const RESOLUTION_OPTIONS: { value: BacktestResolution; label: string }[] = [
   { value: "daily", label: "일봉" },
   { value: "minute", label: "분봉" },
 ];
+
+const STRATEGY_CATEGORY_LABELS: Record<string, string> = {
+  trend: "추세",
+  momentum: "모멘텀",
+  mean_reversion: "평균회귀",
+  volatility: "변동성",
+  composite: "복합",
+};
 
 const BAR_MINUTE_OPTIONS: BarMinutes[] = [1, 3, 5, 10, 15, 30, 60];
 
@@ -399,6 +407,25 @@ export default function BacktestPage() {
     }
   }, [startDate, endDate, minuteLimits]);
 
+  // 전략 버튼: 카테고리별로 묶어 정해진 순서로 보여 준다 (모르는 카테고리는 뒤에 이름 그대로)
+  const strategyGroups = useMemo(() => {
+    const order = ["trend", "momentum", "mean_reversion", "volatility", "composite"];
+    const byCategory = new Map<string, Strategy[]>();
+    for (const strategy of allStrategies) {
+      const key = strategy.category || "기타";
+      if (!byCategory.has(key)) byCategory.set(key, []);
+      byCategory.get(key)!.push(strategy);
+    }
+    const rank = (c: string) => (order.indexOf(c) === -1 ? order.length : order.indexOf(c));
+    return Array.from(byCategory.entries())
+      .sort(([a], [b]) => rank(a) - rank(b))
+      .map(([category, strategies]) => ({
+        category,
+        label: STRATEGY_CATEGORY_LABELS[category] ?? category,
+        strategies,
+      }));
+  }, [allStrategies]);
+
   // 당일 매매 전략(tags에 "intraday", 예: ORB)은 고르는 즉시 분봉 5분 + 15:15 장마감 청산으로 맞춘다 (바꾼 뒤 직접 수정 가능).
   const handleStrategySelect = useCallback((id: string | null) => {
     setSelectedId(id);
@@ -442,25 +469,25 @@ export default function BacktestPage() {
     return null;
   }, [resolution, startDate, endDate, minuteLimits, minuteEstimate, intradayExitOn, intradayExitTime]);
 
-  // Y축 범위 계산 (15% 패딩)
-  const yAxisDomain = useMemo((): [number, number] => {
-    if (!result?.equity_curve) return [0, 100_000_000];
-    const values = Object.values(result.equity_curve);
-    const benchmarkValues = result.benchmark_curve
-      ? Object.values(result.benchmark_curve).map(pct => initialCapital * (1 + pct / 100))
-      : [];
-    const allValues = [...values, ...benchmarkValues, initialCapital];
-    const min = Math.min(...allValues);
-    const max = Math.max(...allValues);
-    const padding = (max - min) * 0.15;
-    return [Math.max(0, min - padding), max + padding];
-  }, [result, initialCapital]);
+  // 종목 가격선: 결과에 들어 있는 종목 순서대로 (요청 종목 순서 유지)
+  const symbolCodes = useMemo(
+    () => Object.keys(result?.symbol_curves ?? {}),
+    [result]
+  );
 
-  // 차트 데이터 (KOSPI는 초기자본 기준 절대값으로 변환, drawdown 포함)
+  // 차트 데이터 (KOSPI·종목은 초기자본 기준 절대값으로 변환, drawdown 포함)
   const chartData: ChartDataPoint[] = useMemo(() => {
     if (!result?.equity_curve) return [];
     const entries = Object.entries(result.equity_curve);
     const benchmarkEntries = result.benchmark_curve || {};
+    const symbolCurves = result.symbol_curves || {};
+
+    // 종목별 기준 종가 = 기간 첫 종가
+    const baseCloses: Record<string, number> = {};
+    for (const [code, curve] of Object.entries(symbolCurves)) {
+      const firstDate = Object.keys(curve).sort()[0];
+      if (firstDate && curve[firstDate] > 0) baseCloses[code] = curve[firstDate];
+    }
 
     let peak = -Infinity;
 
@@ -469,6 +496,14 @@ export default function BacktestPage() {
       const benchmarkValue = benchmarkPct != null
         ? initialCapital * (1 + benchmarkPct / 100)
         : null;
+
+      const symbolValues: Record<string, number | null> = {};
+      const symbolCloses: Record<string, number | null> = {};
+      for (const code of Object.keys(baseCloses)) {
+        const close = symbolCurves[code]?.[date];
+        symbolCloses[code] = close ?? null;
+        symbolValues[code] = close != null ? initialCapital * (close / baseCloses[code]) : null;
+      }
 
       // Track running peak for drawdown
       peak = Math.max(peak, value);
@@ -481,9 +516,30 @@ export default function BacktestPage() {
         benchmarkPct: benchmarkPct ?? null,
         benchmark: benchmarkValue,
         drawdown,
+        symbolValues,
+        symbolCloses,
       };
     });
   }, [result, initialCapital]);
+
+  // 범례·툴팁용 종목명 (마스터파일에서 조회)
+  const [symbolNames, setSymbolNames] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let cancelled = false;
+    const missing = symbolCodes.filter((code) => !symbolNames[code]);
+    if (missing.length === 0) return;
+    (async () => {
+      const resolved: Record<string, string> = {};
+      for (const code of missing) {
+        const symbol = await getSymbolByCode(code);
+        if (symbol?.name) resolved[code] = symbol.name;
+      }
+      if (!cancelled && Object.keys(resolved).length > 0) {
+        setSymbolNames((prev) => ({ ...prev, ...resolved }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [symbolCodes, symbolNames]);
 
   // 거래 내역 (Buy/Sell 마커용)
   const tradeMarkers: TradeMarker[] = useMemo(() => {
@@ -602,18 +658,40 @@ export default function BacktestPage() {
               {isLoading ? (
                 <Loader2 className="w-5 h-5 animate-spin text-slate-400 mx-auto" />
               ) : (
-                <select
-                  value={selectedId || ""}
-                  onChange={(e) => handleStrategySelect(e.target.value || null)}
-                  className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm"
-                >
-                  <option value="">-- 전략 선택 ({allStrategies.length}개) --</option>
-                  {allStrategies.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
+                <div className="space-y-2.5">
+                  {strategyGroups.map((group) => (
+                    <div key={group.category}>
+                      <p className="text-[11px] font-medium text-slate-400 mb-1">{group.label}</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {group.strategies.map((t) => {
+                          const selected = t.id === selectedId;
+                          return (
+                            <button
+                              key={t.id}
+                              type="button"
+                              onClick={() => handleStrategySelect(selected ? null : t.id)}
+                              title={t.description}
+                              aria-pressed={selected}
+                              className={cn(
+                                "px-2.5 py-1 rounded-full border text-xs transition-colors",
+                                selected
+                                  ? "bg-kis-blue border-kis-blue text-white"
+                                  : "border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-kis-blue hover:text-kis-blue"
+                              )}
+                            >
+                              {t.name}
+                              {t.tags?.includes("intraday") && (
+                                <span className={cn("ml-1 text-[10px]", selected ? "text-white/80" : "text-slate-400")}>
+                                  · 분봉
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                   ))}
-                </select>
+                </div>
               )}
               {importedYaml && (
                 <div className="mt-2 px-2 py-1 bg-amber-100 text-amber-700 rounded text-xs">
@@ -995,7 +1073,8 @@ export default function BacktestPage() {
                   chartData={chartData}
                   tradeMarkers={tradeMarkers}
                   initialCapital={initialCapital}
-                  yAxisDomain={yAxisDomain}
+                  symbolCodes={symbolCodes}
+                  symbolNames={symbolNames}
                 />
               )}
 

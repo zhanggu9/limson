@@ -1,0 +1,8 @@
+[Unit]
+Description=LIMSON DuckDNS 주소를 서버 공인 IP로 갱신
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash @APP_DIR@/deploy/duckdns_update.sh

@@ -71,6 +71,8 @@ BASIC_AUTH_PASSWORD='새비밀번호' ./deploy/deploy.sh
 | `DATABASE_URL` | 자동 탐지 | PostgreSQL 접속 주소 (지정하면 그대로 사용) |
 | `BASIC_AUTH` | `on` | `off` 면 인증 없이 공개 (주문·계좌 API까지 공개되므로 권장하지 않음) |
 | `BASIC_AUTH_USER` / `BASIC_AUTH_PASSWORD` | `admin` / 자동 생성 | 웹 로그인 계정. 비밀번호를 비우면 기존 값 유지 |
+| `PUBLIC_DOMAIN` | 지난 배포 값 | 영문 주소 (예: `limson.duckdns.org`). 80 → HTTPS 이동, 443에서 Let's Encrypt 인증서로 HTTPS. IP:8011 접속도 그대로 |
+| `DUCKDNS_TOKEN` | 서버에 저장된 값 | `*.duckdns.org` 주소일 때 서버가 5분마다 자기 IP를 DuckDNS에 알림 (서버 `/etc/open-trading-api/duckdns.env`, root 전용) |
 | `SKIP_LEAN_PULL` | `0` | `1` 이면 LEAN 이미지 다운로드 생략 |
 | `FORCE_LEAN_PULL` / `LEAN_MIN_FREE_GB` | `0` / `50`(arm64 `20`) | 디스크 여유 검사 무시 / 기준 변경 |
 | `CREATE_SWAP` | `1` | `0` 이면 스왑 파일 자동 생성 안 함 |
@@ -80,6 +82,20 @@ BASIC_AUTH_PASSWORD='새비밀번호' ./deploy/deploy.sh
 - 전략 빌더: `http://13.209.87.155:8011/builder`
 - 백테스트: `http://13.209.87.155:8011/backtest`
 - 로그인: 첫 배포 결과에 출력된 ID/PW (서버의 `~/.open-trading-api-web-credentials` 에도 저장)
+
+### 영문 주소 + HTTPS (DuckDNS)
+
+고정 IP가 없어서 서버를 껐다 켜면 IP가 바뀐다. DuckDNS 무료 주소는 서버가 5분마다 자기 IP를 알려 주므로 따라간다.
+
+1. https://www.duckdns.org 에 로그인 → 이름(`limson`) 추가 → 화면 위쪽 `token` 복사
+2. AWS 보안 그룹에서 80·443 포트 열기
+3. 한 번만 토큰과 함께 배포 (이후 배포는 서버에 저장된 값 사용)
+
+```bash
+PUBLIC_DOMAIN=limson.duckdns.org DUCKDNS_TOKEN="토큰" ./deploy/deploy.sh
+```
+
+접속: `https://limson.duckdns.org/builder`, `https://limson.duckdns.org/backtest`
 
 ## PostgreSQL 연결
 

@@ -1,0 +1,9 @@
+[Unit]
+Description=LIMSON DuckDNS 주소 5분마다 갱신
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

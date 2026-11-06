@@ -14,6 +14,9 @@
 #                                      SSH 역터널이 이 서버 127.0.0.1:8002에 붙는다 (디스크/메모리가 작은 서버용)
 #                              비우면 지난 배포 값(/etc/open-trading-api/deploy.conf), 처음이면 server
 #   PUBLIC_HOST=13.209.87.155  안내 메시지에 표시할 주소
+#   PUBLIC_DOMAIN=limson.duckdns.org  영문 주소. 80(→ HTTPS 이동)·443(HTTPS, Let's Encrypt 인증서)으로도 연다.
+#                              한 번 지정하면 /etc/open-trading-api/domain.conf 에 남아 다음 배포에도 유지된다.
+#   DUCKDNS_TOKEN=...          *.duckdns.org 일 때 5분마다 서버 IP를 DuckDNS에 알린다 (서버 root 전용 파일에만 저장)
 #   DATABASE_URL=...           비우면 서버의 PostgreSQL(Docker 컨테이너/로컬 포트)을 자동으로 찾는다
 #   BASIC_AUTH=on|off          웹 접속 Basic 인증 (기본 on — 주문/계좌 API가 함께 노출되기 때문)
 #   BASIC_AUTH_USER=admin
@@ -38,6 +41,8 @@ DEPLOY_DIR="$APP_DIR/deploy"
 WEB_PORT="${WEB_PORT:-8011}"
 BACKTEST_MODE="${BACKTEST_MODE:-}"
 PUBLIC_HOST="${PUBLIC_HOST:-}"
+PUBLIC_DOMAIN="${PUBLIC_DOMAIN:-}"
+DUCKDNS_TOKEN="${DUCKDNS_TOKEN:-}"
 BASIC_AUTH="${BASIC_AUTH:-on}"
 BASIC_AUTH_USER="${BASIC_AUTH_USER:-admin}"
 BASIC_AUTH_PASSWORD="${BASIC_AUTH_PASSWORD:-}"
@@ -51,6 +56,11 @@ SERVICE_GROUP="$(id -gn)"
 CONFIG_DIR="/etc/open-trading-api"
 APP_ENV_FILE="$CONFIG_DIR/app.env"
 DEPLOY_CONF="$CONFIG_DIR/deploy.conf"
+DOMAIN_CONF="$CONFIG_DIR/domain.conf"
+DUCKDNS_ENV="$CONFIG_DIR/duckdns.env"
+NGINX_DOMAIN_CONF="/etc/nginx/conf.d/open-trading-api-domain.conf"
+ACME_ROOT="/var/www/certbot"
+DOMAIN_STATUS=""
 PREBUILT_DIR="$APP_DIR/.deploy-prebuilt"
 NGINX_CONF="/etc/nginx/conf.d/open-trading-api.conf"
 HTPASSWD_FILE="/etc/nginx/open-trading-api.htpasswd"
@@ -622,6 +632,120 @@ configure_nginx() {
 }
 
 # ---------------------------------------------------------------------------
+# 6-1. 영문 주소 (PUBLIC_DOMAIN) — 80은 HTTPS로 보내고, 443에서 :WEB_PORT 와 같은 화면을 연다.
+#      IP:WEB_PORT 접속은 그대로 둔다.
+# ---------------------------------------------------------------------------
+reload_nginx_or_drop_domain() {
+  if as_root "$(nginx_bin)" -t -q 2>/dev/null; then
+    as_root systemctl reload nginx
+  else
+    as_root rm -f "$NGINX_DOMAIN_CONF"
+    as_root systemctl reload nginx
+    warn "도메인 nginx 설정 검사 실패 → 도메인 설정을 뺐습니다 (IP:$WEB_PORT 접속은 그대로)."
+    return 1
+  fi
+}
+
+write_domain_nginx() {
+  local live="/etc/letsencrypt/live/$PUBLIC_DOMAIN" realm='"LIMSON"' tmp
+  [[ "$BASIC_AUTH" == "off" ]] && realm=off
+  as_root mkdir -p "$ACME_ROOT"
+  tmp="$(mktemp)"
+  {
+    printf '# %s — deploy/server_setup.sh가 만든다. 직접 수정하지 말 것.\n' "$PUBLIC_DOMAIN"
+    printf 'server {\n    listen 80;\n    server_name %s;\n' "$PUBLIC_DOMAIN"
+    printf '    location /.well-known/acme-challenge/ {\n        root %s;\n    }\n' "$ACME_ROOT"
+    if as_root test -s "$live/fullchain.pem"; then
+      printf '    location / {\n        return 301 https://$host$request_uri;\n    }\n}\n\n'
+      # :WEB_PORT 서버 블록을 그대로 복사해 443 HTTPS 로 바꾼다 (라우팅·인증·타임아웃이 한 곳에서 관리됨).
+      render "$realm" "$DEPLOY_DIR/nginx/open-trading-api.conf.template" | sed -n '/^server {/,$p' | sed \
+        -e "s|^    listen $WEB_PORT;|    listen 443 ssl;\n    ssl_certificate $live/fullchain.pem;\n    ssl_certificate_key $live/privkey.pem;\n    ssl_protocols TLSv1.2 TLSv1.3;|" \
+        -e "s|^    server_name _;|    server_name $PUBLIC_DOMAIN;|"
+    else
+      printf '    location / {\n        return 503 "HTTPS certificate not issued yet\\n";\n    }\n}\n'
+    fi
+  } > "$tmp"
+  as_root install -m 644 "$tmp" "$NGINX_DOMAIN_CONF"
+  rm -f "$tmp"
+  reload_nginx_or_drop_domain
+}
+
+configure_duckdns() {
+  [[ "$PUBLIC_DOMAIN" == *.duckdns.org ]] || return 0
+  local sub="${PUBLIC_DOMAIN%.duckdns.org}" tmp svc
+  if [[ -n "$DUCKDNS_TOKEN" ]]; then
+    [[ "$DUCKDNS_TOKEN" =~ ^[0-9a-fA-F-]{36}$ ]] || die "DUCKDNS_TOKEN 형식이 이상합니다 (duckdns.org 화면의 token, 36자)."
+    tmp="$(mktemp)"
+    printf 'DUCKDNS_DOMAIN=%s\nDUCKDNS_TOKEN=%s\n' "$sub" "$DUCKDNS_TOKEN" > "$tmp"
+    as_root install -m 600 -o root -g root "$tmp" "$DUCKDNS_ENV"
+    rm -f "$tmp"
+  fi
+  if ! as_root test -s "$DUCKDNS_ENV"; then
+    warn "DuckDNS 토큰이 없습니다 — DUCKDNS_TOKEN=... 으로 한 번 배포하세요 (주소가 서버 IP를 따라가지 않음)."
+    return 0
+  fi
+  for svc in limson-duckdns.service limson-duckdns.timer; do
+    render "" "$DEPLOY_DIR/systemd/$svc" | as_root tee "/etc/systemd/system/$svc" >/dev/null
+  done
+  as_root systemctl daemon-reload
+  as_root systemctl enable --now limson-duckdns.timer >/dev/null 2>&1
+  if as_root systemctl start limson-duckdns.service; then
+    info "DuckDNS: $PUBLIC_DOMAIN → 이 서버 공인 IP (5분마다 갱신)"
+  else
+    warn "DuckDNS 갱신 실패 (sudo journalctl -u limson-duckdns -n 20) — 도메인 이름·토큰을 확인하세요."
+  fi
+}
+
+issue_certificate() {
+  local live="/etc/letsencrypt/live/$PUBLIC_DOMAIN" ip resolved tries=0
+  if as_root test -s "$live/fullchain.pem"; then
+    info "HTTPS 인증서 있음 (certbot 타이머가 자동 갱신)"
+    return 0
+  fi
+  command -v certbot >/dev/null 2>&1 || pkg_install certbot
+  ip="$(curl -fsS --max-time 10 https://checkip.amazonaws.com 2>/dev/null | tr -d '[:space:]' || true)"
+  # DuckDNS는 갱신 직후 몇십 초 뒤에 새 IP를 돌려준다.
+  while :; do
+    resolved="$(getent ahostsv4 "$PUBLIC_DOMAIN" 2>/dev/null | awk 'NR == 1 {print $1}' || true)"
+    [[ -n "$ip" && "$resolved" == "$ip" ]] && break
+    if (( ++tries >= 12 )); then
+      warn "$PUBLIC_DOMAIN 이 이 서버($ip)가 아니라 '${resolved:-없음}'을 가리켜 HTTPS 인증서를 못 받았습니다. 주소가 맞춰진 뒤 다시 배포하세요."
+      return 1
+    fi
+    sleep 10
+  done
+  if ! as_root certbot certonly --webroot -w "$ACME_ROOT" -d "$PUBLIC_DOMAIN" --non-interactive --agree-tos \
+       --register-unsafely-without-email --deploy-hook "systemctl reload nginx" -q; then
+    warn "HTTPS 인증서 발급 실패 (sudo tail -50 /var/log/letsencrypt/letsencrypt.log). 443 포트가 열려 있는지도 확인하세요."
+    return 1
+  fi
+  info "HTTPS 인증서 발급 완료 (Let's Encrypt, 90일마다 자동 갱신)"
+}
+
+configure_domain() {
+  local saved
+  saved="$(as_root sed -n 's/^PUBLIC_DOMAIN=//p' "$DOMAIN_CONF" 2>/dev/null | tail -n 1 || true)"
+  PUBLIC_DOMAIN="${PUBLIC_DOMAIN:-$saved}"
+  PUBLIC_DOMAIN="${PUBLIC_DOMAIN,,}"
+  [[ -n "$PUBLIC_DOMAIN" ]] || return 0
+  [[ "$PUBLIC_DOMAIN" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] \
+    || die "PUBLIC_DOMAIN 형식이 이상합니다: $PUBLIC_DOMAIN"
+  log "영문 주소 $PUBLIC_DOMAIN (HTTPS)"
+  as_root mkdir -p "$CONFIG_DIR"
+  echo "PUBLIC_DOMAIN=$PUBLIC_DOMAIN" | as_root tee "$DOMAIN_CONF" >/dev/null
+  configure_duckdns
+  write_domain_nginx || return 0
+  if issue_certificate; then
+    write_domain_nginx && DOMAIN_STATUS="https://$PUBLIC_DOMAIN"
+  else
+    DOMAIN_STATUS="인증서 없음 — 경고 참고"
+  fi
+  if command -v ufw >/dev/null 2>&1 && as_root ufw status 2>/dev/null | grep -q "Status: active"; then
+    as_root ufw allow 80/tcp >/dev/null && as_root ufw allow 443/tcp >/dev/null
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # 7. 헬스체크
 # ---------------------------------------------------------------------------
 CURL_AUTH_CONFIG=""  # curl -K 설정 파일: 비밀번호를 명령줄에 노출하지 않고 공백/특수문자도 그대로 넘긴다
@@ -749,6 +873,11 @@ print_summary() {
   printf ' LIMSON 배포 결과\n'
   printf '  전략 빌더 : http://%s:%s/builder\n' "$host" "$WEB_PORT"
   printf '  백테스트  : http://%s:%s/backtest\n' "$host" "$WEB_PORT"
+  if [[ "$DOMAIN_STATUS" == https://* ]]; then
+    printf '  영문 주소 : %s/builder  ·  %s/backtest\n' "$DOMAIN_STATUS" "$DOMAIN_STATUS"
+  elif [[ -n "$DOMAIN_STATUS" ]]; then
+    printf '  영문 주소 : %s (%s)\n' "$PUBLIC_DOMAIN" "$DOMAIN_STATUS"
+  fi
   printf '  로그인    : %s\n' "$AUTH_NOTE"
   printf '  PostgreSQL: %s\n' "$DB_STATUS"
   printf '  백테스트  : %s\n' "$([[ "$BACKTEST_MODE" == "local" ]] && echo '로컬 PC 워커 (SSH 역터널 → 127.0.0.1:8002)' || echo '이 서버')"
@@ -781,6 +910,7 @@ main() {
   wait_upstreams
   collect_symbol_masters
   configure_nginx
+  configure_domain
   health_check
   print_summary
 }

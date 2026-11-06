@@ -26,7 +26,7 @@
 
 ```mermaid
 flowchart LR
-    U["브라우저"] --> N["EC2 nginx :8011<br/>Basic 인증"]
+    U["브라우저"] --> N["EC2 nginx :443 (HTTPS)<br/>Basic 인증"]
     N -->|"/"| SB["전략 빌더<br/>Next.js + FastAPI"]
     N -->|"/backtest"| BF["백테스트 화면<br/>Next.js"]
     N -->|"/backtest/api"| T["127.0.0.1:8002"]
@@ -175,7 +175,7 @@ graph LR
 | `strategy_builder/` | 전략 설계 + 시그널 생성 | 80개 기술지표, 10개 프리셋 전략, BUY/SELL/HOLD 신호 ([README](strategy_builder/README.md)) |
 | `backtester/` | 과거 검증 + 파라미터 최적화 | Docker 기반 QuantConnect Lean, HTML 리포트 ([README](backtester/README.md)) |
 | `MCP/` | AI 도구 연결 | KIS Code Assistant + Trading MCP ([README](MCP/README.MD)) |
-| `deploy/` | 서버 배포 | 전략 빌더 + 백테스터를 EC2 VM 한 포트(8011)로 웹 서비스 ([README](deploy/README.md)) |
+| `deploy/` | 서버 배포 | 전략 빌더 + 백테스터를 EC2 VM 한 주소(https://limson.duckdns.org)로 웹 서비스 ([README](deploy/README.md)) |
 
 #### 10개 프리셋 전략
 

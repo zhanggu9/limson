@@ -4,7 +4,8 @@
 #   ./deploy/deploy.sh
 #
 # 환경변수(모두 선택):
-#   DEPLOY_HOST=13.209.87.155        서버 주소
+#   DEPLOY_HOST=limson.duckdns.org   서버 주소 (DuckDNS가 서버 IP를 따라가므로 IP가 바뀌어도 그대로)
+#   PUBLIC_URL=https://limson.duckdns.org  배포 뒤 외부 접속을 확인할 주소
 #   WEB_PORT=8011                    웹 공개 포트 (8010은 서버의 pg-stock-api가 사용)
 #   FRONTEND_BUILD=local             local: 이 PC에서 next build 후 결과만 업로드 / server: 서버에서 빌드
 #   KEY_DIR=/home/l/stock-coin-trade SSH 키(*.pem, *.key)를 찾을 폴더
@@ -18,7 +19,8 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-DEPLOY_HOST="${DEPLOY_HOST:-13.209.87.155}"
+DEPLOY_HOST="${DEPLOY_HOST:-limson.duckdns.org}"
+PUBLIC_URL="${PUBLIC_URL:-https://limson.duckdns.org}"
 WEB_PORT="${WEB_PORT:-8011}"
 FRONTEND_BUILD="${FRONTEND_BUILD:-local}"
 KEY_DIR="${KEY_DIR:-/home/l/stock-coin-trade}"
@@ -185,16 +187,16 @@ run_server_setup() {
 }
 
 check_public_access() {
-  log "외부 접속 확인: http://$DEPLOY_HOST:$WEB_PORT"
+  log "외부 접속 확인: $PUBLIC_URL"
   local code
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "http://$DEPLOY_HOST:$WEB_PORT/builder" || true)"
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$PUBLIC_URL/builder" || true)"
   case "$code" in
     200|401)
-      printf '  OK (HTTP %s) — 브라우저에서 http://%s:%s/builder 접속\n' "$code" "$DEPLOY_HOST" "$WEB_PORT"
+      printf '  OK (HTTP %s) — 브라우저에서 %s/builder 접속\n' "$code" "$PUBLIC_URL"
       ;;
     *)
-      warn "외부에서 $WEB_PORT 포트에 접속하지 못했습니다 (HTTP ${code:-000})."
-      warn "AWS 콘솔 → EC2 → 보안 그룹 → 인바운드 규칙에 'TCP $WEB_PORT, 소스: 내 IP(또는 0.0.0.0/0)'를 추가하세요."
+      warn "외부에서 $PUBLIC_URL 에 접속하지 못했습니다 (HTTP ${code:-000})."
+      warn "AWS 보안 그룹 인바운드 규칙에 TCP 80·443(소스 0.0.0.0/0)이 있는지, PUBLIC_DOMAIN 배포가 됐는지 확인하세요."
       ;;
   esac
 }

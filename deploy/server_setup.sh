@@ -871,12 +871,13 @@ print_summary() {
   local host="${PUBLIC_HOST:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
   printf '\n==================================================\n'
   printf ' LIMSON 배포 결과\n'
-  printf '  전략 빌더 : http://%s:%s/builder\n' "$host" "$WEB_PORT"
-  printf '  백테스트  : http://%s:%s/backtest\n' "$host" "$WEB_PORT"
   if [[ "$DOMAIN_STATUS" == https://* ]]; then
-    printf '  영문 주소 : %s/builder  ·  %s/backtest\n' "$DOMAIN_STATUS" "$DOMAIN_STATUS"
-  elif [[ -n "$DOMAIN_STATUS" ]]; then
-    printf '  영문 주소 : %s (%s)\n' "$PUBLIC_DOMAIN" "$DOMAIN_STATUS"
+    printf '  전략 빌더 : %s/builder\n' "$DOMAIN_STATUS"
+    printf '  백테스트  : %s/backtest\n' "$DOMAIN_STATUS"
+  else
+    printf '  전략 빌더 : http://%s:%s/builder\n' "$host" "$WEB_PORT"
+    printf '  백테스트  : http://%s:%s/backtest\n' "$host" "$WEB_PORT"
+    [[ -n "$DOMAIN_STATUS" ]] && printf '  영문 주소 : %s (%s)\n' "$PUBLIC_DOMAIN" "$DOMAIN_STATUS"
   fi
   printf '  로그인    : %s\n' "$AUTH_NOTE"
   printf '  PostgreSQL: %s\n' "$DB_STATUS"

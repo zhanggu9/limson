@@ -1,7 +1,7 @@
-# 서버 배포 (EC2 VM · 단일 포트 8011)
+# 서버 배포 (EC2 VM · https://limson.duckdns.org)
 
 전략 빌더와 백테스터(백엔드 2개 + 프론트엔드 2개)를 EC2 VM 한 대에 올리고
-`http://13.209.87.155:8011` 한 주소로 웹 서비스합니다. PostgreSQL은 VM에 이미 떠 있는 것을 찾아 연결합니다.
+`https://limson.duckdns.org` 한 주소로 웹 서비스합니다 (서버 IP 13.209.87.155, nginx 내부 포트 8011). PostgreSQL은 VM에 이미 떠 있는 것을 찾아 연결합니다.
 같은 VM의 8010 포트는 기존 `pg-stock-api` 컨테이너(OHLCV 수집·조회 API)가 쓰므로 건드리지 않습니다.
 
 ```
@@ -20,7 +20,7 @@
 
 | 항목 | 내용 |
 |------|------|
-| 보안 그룹 | EC2 인바운드 규칙에 **TCP 8011**(웹)과 **TCP 22**(SSH) 허용 |
+| 보안 그룹 | EC2 인바운드 규칙에 **TCP 80·443**(웹)과 **TCP 22**(SSH) 허용. 8011은 서버 안 헬스체크용이라 닫아 둔다 |
 | 디스크 | 백테스트 엔진 이미지 `quantconnect/lean:latest`가 압축 기준 약 14GB, 풀면 약 42GB(amd64)라 서버에서 돌리려면 **여유 50GB 이상** 필요. 작은 서버는 `BACKTEST_MODE=local`(로컬 PC에서 실행) 사용 |
 | 로컬 PC | `ssh`, `tar`, `curl`, `git`, Node.js 20.9+ (프론트엔드를 로컬에서 빌드) |
 | SSH 키 | `/home/l/stock-coin-trade/` 안의 `*.pem` / `*.key` 를 자동으로 찾음 |
@@ -46,7 +46,7 @@ BACKTEST_MODE=local ./deploy/deploy.sh      # 처음 한 번. 이후에는 ./dep
    - PostgreSQL 자동 탐지 → `/etc/open-trading-api/app.env` 의 `DATABASE_URL` 로 저장
    - (`BACKTEST_MODE=server`일 때만) LEAN 이미지/데이터 준비, 백테스트 API 실행
    - 종목 마스터(코스피·코스닥) 수집, systemd 서비스 + nginx(:8011) 설정, 헬스체크 후 결과 요약 출력
-5. 로컬에서 `http://13.209.87.155:8011` 외부 접속 확인 (안 되면 보안 그룹 안내)
+5. 로컬에서 `PUBLIC_URL`(기본 `https://limson.duckdns.org`) 외부 접속 확인 (안 되면 보안 그룹 안내)
 
 처음 배포에는 수 분(LEAN 이미지 다운로드 포함 시 그 이상) 걸리고, 이후 재배포는 같은 명령으로 하면 됩니다.
 실행 로그는 `deploy/last-deploy.log` 에 남습니다.
@@ -61,8 +61,9 @@ BASIC_AUTH_PASSWORD='새비밀번호' ./deploy/deploy.sh
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `DEPLOY_HOST` | `13.209.87.155` | 서버 주소 |
-| `WEB_PORT` | `8011` | 웹 공개 포트 (8010은 서버의 pg-stock-api가 사용) |
+| `DEPLOY_HOST` | `limson.duckdns.org` | 서버 주소 (SSH) |
+| `PUBLIC_URL` | `https://limson.duckdns.org` | 배포 뒤 외부 접속을 확인할 주소 |
+| `WEB_PORT` | `8011` | nginx 내부 포트 (8010은 서버의 pg-stock-api가 사용) |
 | `BACKTEST_MODE` | 지난 배포 값, 처음이면 `server` | `local`: 백테스트 API+LEAN을 로컬 PC 워커에서 실행 / `server`: 서버에서 실행 |
 | `FRONTEND_BUILD` | `local` | `local`: 로컬 PC에서 빌드해 결과만 업로드 / `server`: 서버에서 빌드 |
 | `KEY_DIR` / `SSH_KEY` | `/home/l/stock-coin-trade` | 키 폴더 / 키 파일 직접 지정 |
@@ -71,7 +72,7 @@ BASIC_AUTH_PASSWORD='새비밀번호' ./deploy/deploy.sh
 | `DATABASE_URL` | 자동 탐지 | PostgreSQL 접속 주소 (지정하면 그대로 사용) |
 | `BASIC_AUTH` | `on` | `off` 면 인증 없이 공개 (주문·계좌 API까지 공개되므로 권장하지 않음) |
 | `BASIC_AUTH_USER` / `BASIC_AUTH_PASSWORD` | `admin` / 자동 생성 | 웹 로그인 계정. 비밀번호를 비우면 기존 값 유지 |
-| `PUBLIC_DOMAIN` | 지난 배포 값 | 영문 주소 (예: `limson.duckdns.org`). 80 → HTTPS 이동, 443에서 Let's Encrypt 인증서로 HTTPS. IP:8011 접속도 그대로 |
+| `PUBLIC_DOMAIN` | 지난 배포 값 | 영문 주소 (예: `limson.duckdns.org`). 80 → HTTPS 이동, 443에서 Let's Encrypt 인증서로 HTTPS |
 | `DUCKDNS_TOKEN` | 서버에 저장된 값 | `*.duckdns.org` 주소일 때 서버가 5분마다 자기 IP를 DuckDNS에 알림 (서버 `/etc/open-trading-api/duckdns.env`, root 전용) |
 | `SKIP_LEAN_PULL` | `0` | `1` 이면 LEAN 이미지 다운로드 생략 |
 | `FORCE_LEAN_PULL` / `LEAN_MIN_FREE_GB` | `0` / `50`(arm64 `20`) | 디스크 여유 검사 무시 / 기준 변경 |
@@ -79,8 +80,8 @@ BASIC_AUTH_PASSWORD='새비밀번호' ./deploy/deploy.sh
 
 ## 접속
 
-- 전략 빌더: `http://13.209.87.155:8011/builder`
-- 백테스트: `http://13.209.87.155:8011/backtest`
+- 전략 빌더: `https://limson.duckdns.org/builder`
+- 백테스트: `https://limson.duckdns.org/backtest`
 - 로그인: 첫 배포 결과에 출력된 ID/PW (서버의 `~/.open-trading-api-web-credentials` 에도 저장)
 
 ### 영문 주소 + HTTPS (DuckDNS)
@@ -115,7 +116,7 @@ LEAN 이미지는 풀면 약 42GB이고 백테스트 한 번에 메모리도 수
 웹 화면은 EC2에서, 백테스트 API와 LEAN은 로컬 PC(WSL)에서 돌리고 SSH 터널로 잇습니다.
 
 ```
-브라우저 → EC2 nginx :8011 /backtest/api → EC2 127.0.0.1:8002 ═(SSH 역터널)═► 로컬 PC 127.0.0.1:18002 백테스트 API → 로컬 Docker LEAN
+브라우저 → EC2 nginx :443 /backtest/api → EC2 127.0.0.1:8002 ═(SSH 역터널)═► 로컬 PC 127.0.0.1:18002 백테스트 API → 로컬 Docker LEAN
                                                    로컬 PC 백테스트 API → 로컬 127.0.0.1:15432 ═(SSH 터널)═► EC2 PostgreSQL
 ```
 
@@ -153,7 +154,7 @@ bash ~/open-trading-api/deploy/server_setup.sh
 
 | 증상 | 확인 |
 |------|------|
-| 외부에서 접속 안 됨 | EC2 보안 그룹에 TCP 8011 허용. 서버 안에서는 `curl -u admin:비번 http://127.0.0.1:8011/api/health` |
+| 외부에서 접속 안 됨 | EC2 보안 그룹에 TCP 80·443 허용, `getent hosts limson.duckdns.org` 가 서버 IP인지 확인 (`sudo journalctl -u limson-duckdns -n 20`). 서버 안에서는 `curl -u admin:비번 http://127.0.0.1:8011/api/health` |
 | 백테스트 화면에서 API 502 | `BACKTEST_MODE=local` 이면 로컬 PC에서 `./deploy/local_backtest_worker.sh status` (WSL이 켜져 있어야 함) |
 | 백테스트 시 "Lean 이미지가 없습니다" | 디스크 확보 후 `sudo docker pull quantconnect/lean:latest` (또는 `FORCE_LEAN_PULL=1 ./deploy/deploy.sh`) |
 | "PostgreSQL 데이터 준비 실패" | 배포 요약의 PostgreSQL 줄 확인, 필요하면 `DATABASE_URL=... ./deploy/deploy.sh` |

@@ -19,7 +19,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKTEST_DIR="$ROOT_DIR/backtester"
-DEPLOY_HOST="${DEPLOY_HOST:-13.209.87.155}"
+DEPLOY_HOST="${DEPLOY_HOST:-limson.duckdns.org}"
 KEY_DIR="${KEY_DIR:-/home/l/stock-coin-trade}"
 SSH_USER="${SSH_USER:-ubuntu}"
 SSH_PORT="${SSH_PORT:-22}"

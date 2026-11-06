@@ -12,13 +12,14 @@
 | `backtester/` | LEAN 백테스터 (FastAPI `backend.main:app` + Next.js), 패키지 `kis_backtest` | BE 8002 (`/api/health`) / FE 3001 (`/backtest`) |
 | `backtester/kis_backtest/providers/postgres/` | 자체 수집 OHLCV PostgreSQL 데이터 공급자 | — |
 | `backtester/kis_backtest/lean/executor.py` | Docker LEAN 실행 (`subprocess.run`) | — |
-| `deploy/` | EC2 배포: `deploy.sh`(로컬→서버), `server_setup.sh`, nginx 템플릿, systemd 4개 | 공개 8011 |
+| `deploy/` | EC2 배포: `deploy.sh`(로컬→서버), `server_setup.sh`, nginx 템플릿, systemd 4개 | 공개 `https://limson.duckdns.org` (443) |
 | `start.sh` (루트) | 4개 서비스 통합 실행 + 헬스체크 + 시그널 시 LEAN 컨테이너 정리 | — |
 | `examples_llm/`, `examples_user/`, `MCP/`, `legacy/` | 원본 샘플 코드 — 특별한 이유 없으면 건드리지 않음 | — |
 
 ## 실행
 - 로컬 전체 실행: `./start.sh` (Python은 `uv run`, 프론트는 `npm run dev`)
-- 배포: `./deploy/deploy.sh` (기본 `DEPLOY_HOST=13.209.87.155`, `WEB_PORT=8011` — 8010은 서버의 pg-stock-api가 사용 중)
+- 배포: `./deploy/deploy.sh` (기본 `DEPLOY_HOST=limson.duckdns.org`). 웹은 `https://limson.duckdns.org` (DuckDNS + Let's Encrypt).
+  nginx는 서버 안에서 `WEB_PORT=8011`도 듣지만 보안 그룹에서 8011은 닫혀 있다 (헬스체크 전용). 8010은 서버의 pg-stock-api가 사용 중.
 - 개발 환경: Windows + WSL Ubuntu 24.04, VS Code
 
 ## 핵심 설계 결정 (바꾸기 전에 사용자에게 확인)

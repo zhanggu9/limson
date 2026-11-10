@@ -5,6 +5,7 @@ Docker 컨테이너로 Lean 백테스트 직접 실행. (Lean CLI 불필요)
 
 import json
 import logging
+import os
 import re
 import subprocess
 import uuid
@@ -19,6 +20,11 @@ logger = logging.getLogger(__name__)
 
 # Lean Docker 이미지
 LEAN_IMAGE = "quantconnect/lean:latest"
+
+# LEAN 데이터 읽기 작업 스레드 수. 여러 스레드가 Python 커스텀 데이터(Reader)를 동시에 부르면
+# 워밍업 시작 직후("Launching analysis ... Warmup: True") 교착으로 멈추는 일이 있다
+# (실측: 동시 16개 기본값 9개 멈춤 → 1로 두면 32개 중 0개). Python Reader는 어차피 GIL 때문에 한 번에 하나라 느려지지 않는다.
+DATA_FEED_WORKERS = int(os.getenv("LEAN_DATA_FEED_WORKERS", "1"))
 
 
 @dataclass
@@ -124,7 +130,9 @@ class LeanExecutor:
         cls,
         project: LeanProject,
         stream_logs: bool = False,
-        timeout: int = 600,
+        timeout: float = 600,
+        data_path: Optional[Path] = None,
+        container_name: Optional[str] = None,
     ) -> LeanRun:
         """Docker로 Lean 백테스트 실행
         
@@ -132,6 +140,8 @@ class LeanExecutor:
             project: Lean 프로젝트
             stream_logs: 로그 스트리밍 여부
             timeout: 타임아웃 (초)
+            data_path: /Data 로 붙일 데이터 폴더 (기본: 워크스페이스 data). 하이퍼옵트는 전용 폴더를 쓴다.
+            container_name: 컨테이너 이름 (기본: run_id로 만든다). 호출 쪽에서 직접 멈출 때 쓴다.
         
         Returns:
             LeanRun 결과 객체
@@ -146,7 +156,7 @@ class LeanExecutor:
         # 경로 (절대 경로로 변환)
         workspace = project.project_dir.parent.parent.resolve()
         project_path = project.project_dir.resolve()
-        data_path = (workspace / "data").resolve()
+        data_path = (data_path or workspace / "data").resolve()
         results_path = output_dir.resolve()
         
         # 디버깅: 경로 확인
@@ -179,6 +189,7 @@ class LeanExecutor:
             "data-provider": "QuantConnect.Lean.Engine.DataFeeds.DefaultDataProvider",
             "object-store": "QuantConnect.Lean.Engine.Storage.LocalObjectStore",
             "data-aggregator": "QuantConnect.Lean.Engine.DataFeeds.AggregationManager",
+            "data-feed-workers-count": DATA_FEED_WORKERS,
             "environments": {
                 "backtesting": {
                     "live-mode": False,
@@ -198,7 +209,7 @@ class LeanExecutor:
         
         # Docker 명령어 구성
         # 타임아웃 때 docker 클라이언트만 죽으면 컨테이너는 계속 돌므로, 이름을 붙여 직접 멈춘다
-        container_name = "lean-" + re.sub(r"[^A-Za-z0-9_.-]", "-", project.run_id)[:80] + "-" + uuid.uuid4().hex[:6]
+        container_name = container_name or cls.container_name_for(project.run_id)
         cmd = [
             "docker", "run", "--rm",
             "--name", container_name,
@@ -256,11 +267,16 @@ class LeanExecutor:
             raise RuntimeError(error_msg)
     
     @staticmethod
-    def _kill_container(name: str) -> None:
-        """타임아웃된 LEAN 컨테이너를 멈춘다 (--rm 이라 멈추면 자동 삭제)."""
+    def container_name_for(run_id: str) -> str:
+        """실행 ID로 겹치지 않는 컨테이너 이름을 만든다."""
+        return "lean-" + re.sub(r"[^A-Za-z0-9_.-]", "-", run_id)[:80] + "-" + uuid.uuid4().hex[:6]
+
+    @staticmethod
+    def _kill_container(name: str, reason: str = "타임아웃") -> None:
+        """LEAN 컨테이너를 멈춘다 (--rm 이라 멈추면 자동 삭제)."""
         try:
             subprocess.run(["docker", "kill", name], capture_output=True, text=True, timeout=30)
-            logger.warning(f"[Lean] 타임아웃 컨테이너 정지: {name}")
+            logger.warning(f"[Lean] {reason} 컨테이너 정지: {name}")
         except (OSError, subprocess.SubprocessError) as e:
             logger.error(f"[Lean] 컨테이너 정지 실패 ({name}): {e}")
 

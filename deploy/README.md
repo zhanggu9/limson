@@ -8,6 +8,7 @@
 브라우저 ──► nginx :8011 (Basic 인증)
               ├─ /backtest/api/*  → 백테스트 API   127.0.0.1:8002 ──► PostgreSQL(VM) · Docker LEAN
               │                     (BACKTEST_MODE=local이면 로컬 PC 워커로 가는 SSH 역터널, 아래 참고)
+              │                     /backtest/api/optimize/* 는 하이퍼옵트 스트리밍이라 버퍼링 끔 · 대기 3600초
               ├─ /backtest*       → 백테스트 화면  Next.js 127.0.0.1:3001 (자원: /backtest-static/_next)
               ├─ /api/*           → 전략 빌더 API  FastAPI 127.0.0.1:8000 (실시간 호가 WebSocket 포함)
               └─ /                → 전략 빌더 화면 Next.js 127.0.0.1:3000 (/builder, /execute)

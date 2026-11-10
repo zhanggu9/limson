@@ -33,7 +33,7 @@ _workspace_path = _project_root / ".lean-workspace"
 from kis_backtest.lean.project_manager import LeanProjectManager
 LeanProjectManager.set_workspace(str(_workspace_path))
 
-from backend.routes import strategies, backtest, files, symbols, auth, factor
+from backend.routes import strategies, backtest, files, symbols, auth, factor, optimize
 
 # 로깅 설정
 logging.basicConfig(
@@ -159,6 +159,12 @@ app.include_router(
     factor.router,
     prefix="/api/factor",
     tags=["factor"],
+)
+
+app.include_router(
+    optimize.router,
+    prefix="/api/optimize",
+    tags=["optimize"],
 )
 
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Loader2,
   Play,
@@ -19,51 +19,23 @@ import {
 } from "lucide-react";
 import { cn, formatCurrency, formatPercent } from "@/lib/utils";
 import { getMinuteCoverage, getSymbolByCode, listStrategies, runBacktest, runCustomBacktest } from "@/lib/api";
+import {
+  BAR_MINUTE_OPTIONS,
+  DAY_MS,
+  LEAN_BARS_PER_SECOND,
+  LEAN_STARTUP_SECONDS,
+  RESOLUTION_OPTIONS,
+  countWeekdays,
+  formatDuration,
+  groupStrategies,
+  toDateInput,
+} from "@/lib/backtestOptions";
+import { takeBacktestPrefill } from "@/lib/prefill";
 import { FileDropZone } from "@/components/file";
 import { StockInput } from "@/components/symbols";
 import { EquityChart } from "@/components/backtest";
 import type { ChartDataPoint, TradeMarker } from "@/components/backtest";
 import type { Strategy, BacktestResult, BacktestResolution, BarMinutes, MinuteCoverage, ParamDefinition } from "@/types";
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-const RESOLUTION_OPTIONS: { value: BacktestResolution; label: string }[] = [
-  { value: "daily", label: "일봉" },
-  { value: "minute", label: "분봉" },
-];
-
-const STRATEGY_CATEGORY_LABELS: Record<string, string> = {
-  trend: "추세",
-  momentum: "모멘텀",
-  mean_reversion: "평균회귀",
-  volatility: "변동성",
-  composite: "복합",
-};
-
-const BAR_MINUTE_OPTIONS: BarMinutes[] = [1, 3, 5, 10, 15, 30, 60];
-
-// 예상 소요시간 (실측: LEAN 기동 약 5초 + 커스텀 분봉 초당 약 3,500봉)
-const LEAN_STARTUP_SECONDS = 5;
-const LEAN_BARS_PER_SECOND = 3500;
-
-function toDateInput(date: Date): string {
-  return date.toISOString().split("T")[0];
-}
-
-/** 시작일~종료일(포함)의 평일 수 — 서버 estimate_minute_bars 와 같은 기준 */
-function countWeekdays(start: string, end: string): number {
-  let count = 0;
-  for (let t = Date.parse(start); t <= Date.parse(end); t += DAY_MS) {
-    const day = new Date(t).getUTCDay();
-    if (day !== 0 && day !== 6) count += 1;
-  }
-  return count;
-}
-
-function formatDuration(seconds: number): string {
-  if (seconds < 60) return `약 ${Math.max(1, Math.round(seconds))}초`;
-  return `약 ${Math.round(seconds / 60)}분`;
-}
 
 // 통계 카드 컴포넌트
 function StatCard({
@@ -224,14 +196,25 @@ export default function BacktestPage() {
     return allStrategies.find(s => s.id === selectedId) || null;
   }, [selectedId, allStrategies]);
   
-  // 전략 선택 시 기본 파라미터로 초기화
+  // 하이퍼옵트에서 넘어온 파라미터 값 (전략이 선택된 뒤 기본값 위에 덮어쓴다)
+  const pendingParams = useRef<Record<string, number> | null>(null);
+  const [prefillNote, setPrefillNote] = useState<string | null>(null);
+
+  // 전략 선택 시 기본 파라미터로 초기화.
+  // 전략 목록을 다시 받아 같은 전략의 객체만 새로 생긴 경우에는 값을 그대로 둔다 (넘어온 값·조정한 값 유지).
+  const appliedStrategyId = useRef<string | null>(null);
   useEffect(() => {
+    const strategyId = selectedStrategy?.id ?? null;
+    if (strategyId === appliedStrategyId.current) return;
+    appliedStrategyId.current = strategyId;
     if (selectedStrategy?.params) {
       const defaults: Record<string, number> = {};
       Object.entries(selectedStrategy.params).forEach(([key, def]) => {
         defaults[key] = def.default;
       });
-      setParamOverrides(defaults);
+      const pending = pendingParams.current;
+      pendingParams.current = null;
+      setParamOverrides(pending ? { ...defaults, ...pending } : defaults);
     } else {
       setParamOverrides({});
     }
@@ -295,6 +278,36 @@ export default function BacktestPage() {
     loadData();
   }, []);
 
+  // 하이퍼옵트 결과의 "이 값으로 백테스트": 전략 목록을 받은 뒤 넘어온 설정을 채운다
+  useEffect(() => {
+    if (isLoading) return;
+    const prefill = takeBacktestPrefill();
+    if (!prefill) return;
+    if (prefill.yaml) {
+      setImportedYaml(prefill.yaml);
+      setSelectedId(null);
+    } else if (prefill.strategyId) {
+      pendingParams.current = prefill.params ?? null;
+      setImportedYaml(null);
+      setSelectedId(prefill.strategyId);
+    }
+    setSelectedStocks(prefill.symbols);
+    setStartDate(prefill.startDate);
+    setEndDate(prefill.endDate);
+    setResolution(prefill.resolution);
+    setBarMinutes(prefill.barMinutes);
+    setIntradayExitOn(Boolean(prefill.intradayExit));
+    if (prefill.intradayExit) setIntradayExitTime(prefill.intradayExit);
+    setInitialCapital(prefill.initialCapital);
+    setCommissionRate(prefill.commissionRate);
+    setTaxRate(prefill.taxRate);
+    setSlippage(prefill.slippage);
+    setResult(null);
+    setError(null);
+    setPresetApplied(false);
+    setPrefillNote(prefill.note ?? "하이퍼옵트 결과를 불러왔습니다.");
+  }, [isLoading]);
+
   // 분봉 데이터 범위 (DB에 있는 첫·마지막 거래일) — 분봉 기간 입력 범위와 검증에 쓴다
   useEffect(() => {
     getMinuteCoverage()
@@ -317,6 +330,7 @@ export default function BacktestPage() {
     setTradesOpen(false);
     setResult(null);
     setError(null);
+    setPrefillNote(null);
     setPresetApplied(true);
   }, []);
 
@@ -408,23 +422,7 @@ export default function BacktestPage() {
   }, [startDate, endDate, minuteLimits]);
 
   // 전략 버튼: 카테고리별로 묶어 정해진 순서로 보여 준다 (모르는 카테고리는 뒤에 이름 그대로)
-  const strategyGroups = useMemo(() => {
-    const order = ["trend", "momentum", "mean_reversion", "volatility", "composite"];
-    const byCategory = new Map<string, Strategy[]>();
-    for (const strategy of allStrategies) {
-      const key = strategy.category || "기타";
-      if (!byCategory.has(key)) byCategory.set(key, []);
-      byCategory.get(key)!.push(strategy);
-    }
-    const rank = (c: string) => (order.indexOf(c) === -1 ? order.length : order.indexOf(c));
-    return Array.from(byCategory.entries())
-      .sort(([a], [b]) => rank(a) - rank(b))
-      .map(([category, strategies]) => ({
-        category,
-        label: STRATEGY_CATEGORY_LABELS[category] ?? category,
-        strategies,
-      }));
-  }, [allStrategies]);
+  const strategyGroups = useMemo(() => groupStrategies(allStrategies), [allStrategies]);
 
   // 당일 매매 전략(tags에 "intraday", 예: ORB)은 고르는 즉시 분봉 5분 + 15:15 장마감 청산으로 맞춘다 (바꾼 뒤 직접 수정 가능).
   const handleStrategySelect = useCallback((id: string | null) => {
@@ -632,6 +630,11 @@ export default function BacktestPage() {
           LEAN 테스트 설정 불러오기
         </button>
       </div>
+      {prefillNote && (
+        <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
+          {prefillNote} 백테스트 실행 버튼을 누르세요.
+        </div>
+      )}
       {presetApplied && (
         <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-200">
           테스트 설정이 적용되었습니다. SK하이닉스(000660), SMA 크로스오버, 2025-10-10~2026-10-14 기간으로 백테스트 실행 버튼을 누르세요.

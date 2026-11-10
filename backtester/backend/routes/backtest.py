@@ -499,6 +499,20 @@ def bars_per_day(bar_minutes: int) -> int:
     return math.ceil(_CONTINUOUS_SESSION_MINUTES / bar_minutes) + 1
 
 
+def minute_warmup_start(trading_days: List[date], start: date, warmup_bars: int, bar_minutes: int) -> date:
+    """분봉 워밍업 시작일: 시작일 이전 거래일 중 지표 준비에 필요한 거래일 수(+1일 여유)만큼 거슬러 간 날.
+
+    trading_days 는 분봉이 있는 날 목록. 이전 거래일이 모자라면 있는 만큼만 거슬러 간다.
+    """
+    if warmup_bars <= 0:
+        return start
+    needed = math.ceil(warmup_bars / bars_per_day(bar_minutes)) + 1
+    prior = [day for day in trading_days if day < start]
+    if not prior:
+        return start
+    return prior[-min(needed, len(prior))]
+
+
 def estimate_minute_bars(symbol_count: int, start: date, end: date, bar_minutes: int) -> int:
     """분봉 백테스트가 LEAN에서 처리할 봉 수 추정 (영업일 기준, 휴장일 미반영이라 약간 큼)."""
     weekdays = sum(
@@ -572,14 +586,15 @@ async def prepare_minute_market_data(
 
     Returns:
         {"downloaded": [...], "skipped": [], "errors": [...], "warnings": [...],
-         "warmup_days": 시작일 이전 데이터의 달력 일수, "source": "PostgreSQL 분봉"}
+         "warmup_days": 시작일 이전 데이터의 달력 일수, "trading_days": 분봉이 있는 날 목록,
+         "source": "PostgreSQL 분봉"}
     """
     from psycopg import Error as PostgresError
     from kis_backtest.providers.postgres import PostgresDataProvider
 
     result = {
         "downloaded": [], "skipped": [], "errors": [], "warnings": [],
-        "warmup_days": 0, "source": "PostgreSQL 분봉",
+        "warmup_days": 0, "trading_days": [], "source": "PostgreSQL 분봉",
     }
 
     def db_error(exc: Exception) -> dict:
@@ -618,14 +633,12 @@ async def prepare_minute_market_data(
     except PostgresError as exc:
         return db_error(exc)
 
-    prior_days = sorted({
-        day for days in days_by_symbol.values() for day, bars in days.items()
-        if day < req_start and bars
+    trading_days = sorted({
+        day for days in days_by_symbol.values() for day, bars in days.items() if bars
     })
-    warmup_start = req_start
-    if warmup_trading_days and prior_days:
-        warmup_start = prior_days[-min(warmup_trading_days, len(prior_days))]
+    warmup_start = minute_warmup_start(trading_days, req_start, warmup_bars, bar_minutes)
     result["warmup_days"] = (req_start - warmup_start).days
+    result["trading_days"] = trading_days
 
     minute_root = workspace / "data" / "equity" / "krx" / "minute" / f"{bar_minutes}m"
     for symbol in symbols:

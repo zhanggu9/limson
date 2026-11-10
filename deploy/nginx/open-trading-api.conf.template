@@ -32,6 +32,16 @@ server {
     proxy_read_timeout 300s;
     proxy_send_timeout 300s;
 
+    # 하이퍼옵트는 진행 상황을 한 줄씩 흘려보내는 긴 요청이다 (수십 분까지, 5초마다 신호).
+    # 버퍼링을 끄고 대기 시간을 늘린다. 응답의 X-Accel-Buffering: no 와 같은 뜻.
+    location /backtest/api/optimize/ {
+        proxy_pass http://127.0.0.1:8002/api/optimize/;
+        proxy_buffering off;
+        gzip off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
     # LEAN 백테스트는 동기 요청으로 수 분까지 걸릴 수 있다 (executor 타임아웃 600초).
     location /backtest/api/ {
         proxy_pass http://127.0.0.1:8002/api/;

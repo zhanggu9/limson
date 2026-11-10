@@ -14,11 +14,12 @@
 | 영역 | 내용 | 주요 파일 |
 | --- | --- | --- |
 | **데이터 소스** | 백테스트 OHLCV를 KIS API 대신 자체 수집 PostgreSQL에서 읽는 데이터 공급자 추가. 테이블·컬럼명은 환경변수로 설정하고, 식별자 검증으로 SQL 인젝션을 막았습니다. 단독 실행 스모크 테스트 포함 | `backtester/kis_backtest/providers/postgres/`, `backtester/kis_backtest/strategies/preset/opening_range_breakout.py` |
-| **백테스트 신뢰성** | 단계별 실행 시간 로깅, 벤치마크 페이지네이션·커버리지 로그, **불완전한 벤치마크 곡선은 결과에서 제외**, KRX 종목 속성 중복 제거 | `backtester/backend/routes/backtest.py` |
+| **백테스트 신뢰성** | 단계별 실행 시간 로깅, 벤치마크 페이지네이션·커버리지 로그, **불완전한 벤치마크 곡선은 결과에서 제외**, KRX 종목 속성 중복 제거, LEAN 데이터 읽기 스레드를 1개로 두어 **여러 개 동시 실행 시 시작 직후 멈추는 교착 방지** | `backtester/backend/routes/backtest.py`, `backtester/kis_backtest/lean/executor.py` |
 | **통합 실행기** | 전략 빌더·백테스터(백엔드 2 + 프론트엔드 2)를 한 번에 띄우고, HTTP 헬스체크로 준비 상태를 확인하며, 시그널을 받으면 안전하게 종료하는 루트 `start.sh` | `start.sh` |
 | **배포** | EC2 한 대에 **nginx 단일 포트(Basic 인증) + systemd 4개 서비스**로 배포하는 스크립트. PostgreSQL 자동 탐지, 디스크 여유를 보고 LEAN 이미지 다운로드 여부 결정, 스왑 자동 생성 | `deploy/` |
 | **하이브리드 실행** | t3.micro(1GB RAM)에서 42GB짜리 LEAN을 돌릴 수 없어서, **웹은 EC2, 백테스트는 로컬 PC**에서 실행하고 SSH 역터널로 연결. 끊기면 5초마다 자동 재접속 | `deploy/local_backtest_worker.sh` |
 | **분봉 백테스트** | 백테스트 화면에서 **일봉/분봉** 선택. 분봉은 PostgreSQL에 매일 쌓이는 1분봉(`ohlcv_minute_day`)을 **1·3·5·10·15·30·60분봉**으로 묶어 LEAN이 하루치씩 읽음. 시작일 이전 데이터로 지표 워밍업, **장마감 청산**(당일 매매) 옵션, 액면분할 의심 경고, 규모 한도(기본 150만 봉). 분봉 전용 **시가 범위 돌파(ORB)** 전략 | `backtester/backend/routes/backtest.py`, `backtester/kis_backtest/codegen/generator.py`, `backtester/kis_backtest/providers/postgres/` |
+| **하이퍼옵트** | freqtrade hyperopt처럼 전략의 숫자(지표 기간·조건 값·손절/익절 %) 범위를 정하면 **Optuna TPE**로 값을 골라 가며 LEAN 백테스트를 반복해, 고른 기준(샤프·소르티노·칼마·수익률÷낙폭·수익률)이 가장 좋은 조합을 찾습니다. **일봉·분봉**, 프리셋·YAML(전략 빌더) 전략 모두 지원하고, 빌더 YAML은 적힌 숫자를 자동으로 탐색 대상으로 뽑습니다. 기간 뒤쪽을 **검증 구간**으로 떼어 두었다가 상위 조합과 기본값을 다시 돌려 과최적화를 확인합니다. 진행 상황을 실시간으로 보여 주고(요청 하나 안에서 스트리밍), 4개씩 동시 실행, "이 값으로 백테스트"·YAML 받기 | `backtester/kis_backtest/optimize/`, `backtester/backend/routes/optimize.py`, `/backtest/optimize` |
 | **모멘텀 팩터** | 벡터화 백테스트 엔진으로 유니버스를 12-1개월 모멘텀 분위로 나눠 몇 초 만에 검증. 분위별 성과, 롱숏, Rank IC, 최신 순위 | `backtester/kis_backtest/vectorized/`, `/backtest/factor` |
 | **운영 점검** | pg-stock 테이블·분봉 보유 여부를 읽기 전용으로 확인하는 스크립트 | `deploy/check_pg_stock.sh` |
 

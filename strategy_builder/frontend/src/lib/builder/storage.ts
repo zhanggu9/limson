@@ -4,6 +4,7 @@
 
 import type { StoredStrategy, BuilderState } from "@/types/builder";
 import { randomToken } from "@/lib/utils";
+import { builderStateToYamlString } from "@/lib/builder/yaml";
 
 const STORAGE_KEY = "kis2_custom_strategies";
 const MAX_STRATEGIES = 50;
@@ -28,13 +29,37 @@ export function loadAllStrategies(): StoredStrategy[] {
     if (!stored) {
       return [];
     }
-    const strategies = JSON.parse(stored) as StoredStrategy[];
+    const strategies = syncYaml(JSON.parse(stored) as StoredStrategy[]);
     return strategies.sort(
       (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
     );
   } catch {
     return [];
   }
+}
+
+function toYamlSafe(state: BuilderState): string | undefined {
+  try {
+    return builderStateToYamlString(state);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 저장된 전략마다 YAML을 지금 변환 규칙으로 다시 만들고, 달라진 게 있으면 저장한다.
+ * (YAML 필드가 생기기 전에 저장한 전략도 빌더를 한 번 열면 백테스터에서 보이게 된다)
+ */
+function syncYaml(strategies: StoredStrategy[]): StoredStrategy[] {
+  let changed = false;
+  const synced = strategies.map((s) => {
+    const yaml = toYamlSafe(s.state);
+    if (yaml === s.yaml) return s;
+    changed = true;
+    return { ...s, yaml };
+  });
+  if (changed) persistStrategies(synced);
+  return synced;
 }
 
 /**
@@ -61,6 +86,7 @@ export function saveStrategy(state: BuilderState, existingId?: string): StoredSt
         name: state.metadata.name,
         updatedAt: now,
         state,
+        yaml: toYamlSafe(state),
       };
       const newStrategies = [...strategies];
       newStrategies[index] = updated;
@@ -76,6 +102,7 @@ export function saveStrategy(state: BuilderState, existingId?: string): StoredSt
     createdAt: now,
     updatedAt: now,
     state,
+    yaml: toYamlSafe(state),
   };
 
   // Enforce max limit

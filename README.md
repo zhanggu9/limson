@@ -20,6 +20,7 @@
 | **하이브리드 실행** | t3.micro(1GB RAM)에서 42GB짜리 LEAN을 돌릴 수 없어서, **웹은 EC2, 백테스트는 로컬 PC**에서 실행하고 SSH 역터널로 연결. 끊기면 5초마다 자동 재접속 | `deploy/local_backtest_worker.sh` |
 | **분봉 백테스트** | 백테스트 화면에서 **일봉/분봉** 선택. 분봉은 PostgreSQL에 매일 쌓이는 1분봉(`ohlcv_minute_day`)을 **1·3·5·10·15·30·60분봉**으로 묶어 LEAN이 하루치씩 읽음. 시작일 이전 데이터로 지표 워밍업, **장마감 청산**(당일 매매) 옵션, 액면분할 의심 경고, 규모 한도(기본 150만 봉). 분봉 전용 **시가 범위 돌파(ORB)** 전략 | `backtester/backend/routes/backtest.py`, `backtester/kis_backtest/codegen/generator.py`, `backtester/kis_backtest/providers/postgres/` |
 | **하이퍼옵트** | freqtrade hyperopt처럼 전략의 숫자(지표 기간·조건 값·손절/익절 %) 범위를 정하면 **Optuna TPE**로 값을 골라 가며 LEAN 백테스트를 반복해, 고른 기준(샤프·소르티노·칼마·수익률÷낙폭·수익률)이 가장 좋은 조합을 찾습니다. **일봉·분봉**, 프리셋·YAML(전략 빌더) 전략 모두 지원하고, 빌더 YAML은 적힌 숫자를 자동으로 탐색 대상으로 뽑습니다. 기간 뒤쪽을 **검증 구간**으로 떼어 두었다가 상위 조합과 기본값을 다시 돌려 과최적화를 확인합니다. 진행 상황을 실시간으로 보여 주고(요청 하나 안에서 스트리밍), 4개씩 동시 실행, "이 값으로 백테스트"·YAML 받기 | `backtester/kis_backtest/optimize/`, `backtester/backend/routes/optimize.py`, `/backtest/optimize` |
+| **내 전략 연동** | 전략 빌더에서 저장한 전략이 백테스트·하이퍼옵트 화면의 「내 전략」에 바로 나옵니다. 빌더가 저장할 때 `.kis.yaml`도 함께 넣어 두고, 같은 주소의 백테스터가 그 브라우저 저장소(localStorage)를 읽습니다. 한글 이름 전략도 백테스터가 받는 영문 ID로 바꿔 줍니다 | `strategy_builder/frontend/src/lib/builder/yaml.ts`, `backtester/frontend/src/lib/myStrategies.ts` |
 | **운영 점검** | pg-stock 테이블·분봉 보유 여부를 읽기 전용으로 확인하는 스크립트 | `deploy/check_pg_stock.sh` |
 
 ## 아키텍처

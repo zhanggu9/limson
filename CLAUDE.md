@@ -37,6 +37,7 @@
 - nginx 단일 포트 + Basic 인증. 인증 정보·DB URL·SSH 키는 커밋하지 않는다 (`kis_devlp.yaml`에 실제 키 넣지 말 것).
 
 ## 운영 메모
+- 빌더의 「내 전략」은 서버가 아니라 브라우저 localStorage(`kis2_custom_strategies`)에 있다. 백테스터는 같은 주소(nginx 단일 포트)일 때만 그걸 읽어 「내 전략」으로 보여 준다 → 로컬 개발(3000/3001 포트가 다름)에서는 비어 보인다. 저장할 때 빌더가 `yaml` 필드를 같이 넣고, 빌더를 열 때마다 모든 전략의 YAML을 다시 만든다.
 - 백테스트마다 `backtester/.lean-workspace/projects/bt_*` 폴더가 남고 자동 삭제되지 않음. 컨테이너가 root로 쓰므로 root 소유 → 주기적 정리 필요.
 - 서버 실행 사용자는 `docker` 그룹 소속이어야 함 (`server_setup.sh`가 처리).
 

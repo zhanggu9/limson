@@ -31,7 +31,8 @@ import {
   toDateInput,
 } from "@/lib/backtestOptions";
 import { takeBacktestPrefill } from "@/lib/prefill";
-import { FileDropZone } from "@/components/file";
+import { FileDropZone, MyStrategyChips } from "@/components/file";
+import { useMyStrategies, type MyStrategy } from "@/lib/myStrategies";
 import { StockInput } from "@/components/symbols";
 import { EquityChart } from "@/components/backtest";
 import type { ChartDataPoint, TradeMarker } from "@/components/backtest";
@@ -337,6 +338,18 @@ export default function BacktestPage() {
   // Import 핸들러
   const handleImport = useCallback((file: File, content: string) => {
     setImportedYaml(content);
+    setSelectedId(null);
+    setPresetApplied(false);
+  }, []);
+
+  // 전략 빌더의 내 전략 (같은 브라우저 localStorage)
+  const myStrategies = useMyStrategies();
+  const selectedMyStrategy = useMemo(
+    () => (importedYaml ? myStrategies.strategies.find((s) => s.yaml === importedYaml) ?? null : null),
+    [importedYaml, myStrategies.strategies]
+  );
+  const handleMyStrategySelect = useCallback((strategy: MyStrategy | null) => {
+    setImportedYaml(strategy?.yaml ?? null);
     setSelectedId(null);
     setPresetApplied(false);
   }, []);
@@ -694,11 +707,17 @@ export default function BacktestPage() {
                       </div>
                     </div>
                   ))}
+                  <MyStrategyChips
+                    strategies={myStrategies.strategies}
+                    loaded={myStrategies.loaded}
+                    selectedYaml={importedYaml}
+                    onSelect={handleMyStrategySelect}
+                  />
                 </div>
               )}
               {importedYaml && (
                 <div className="mt-2 px-2 py-1 bg-amber-100 text-amber-700 rounded text-xs">
-                  Import된 파일 사용 중
+                  {selectedMyStrategy ? `내 전략 사용 중 · ${selectedMyStrategy.name}` : "Import된 파일 사용 중"}
                 </div>
               )}
             

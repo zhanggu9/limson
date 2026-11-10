@@ -139,6 +139,8 @@ export interface StoredStrategy {
   createdAt: string;
   updatedAt: string;
   state: BuilderState;
+  /** 저장 시점의 .kis.yaml (같은 브라우저의 백테스터가 "내 전략"으로 읽는다) */
+  yaml?: string;
 }
 
 // ============================================================

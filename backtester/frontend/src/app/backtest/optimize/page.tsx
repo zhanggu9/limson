@@ -16,7 +16,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getHyperoptSpace, getHyperoptStatus, getMinuteCoverage, listStrategies, runHyperopt } from "@/lib/api";
-import { FileDropZone } from "@/components/file";
+import { FileDropZone, MyStrategyChips } from "@/components/file";
+import { useMyStrategies, type MyStrategy } from "@/lib/myStrategies";
 import { StockInput } from "@/components/symbols";
 import { HyperoptProgress, HyperoptResults, ParamRangeTable, type TrialEvent } from "@/components/optimize";
 import {
@@ -347,6 +348,13 @@ export default function HyperoptPage() {
     setSelectedId(null);
   }, []);
 
+  // 전략 빌더의 내 전략 (같은 브라우저 localStorage)
+  const myStrategies = useMyStrategies();
+  const handleMyStrategySelect = useCallback((strategy: MyStrategy | null) => {
+    setImportedYaml(strategy?.yaml ?? null);
+    setSelectedId(null);
+  }, []);
+
   const strategyGroups = useMemo(() => groupStrategies(allStrategies), [allStrategies]);
   const strategyName = space?.name ?? allStrategies.find((s) => s.id === selectedId)?.name ?? null;
 
@@ -643,11 +651,19 @@ export default function HyperoptPage() {
                     </div>
                   </div>
                 ))}
+                <MyStrategyChips
+                  strategies={myStrategies.strategies}
+                  loaded={myStrategies.loaded}
+                  selectedYaml={importedYaml}
+                  onSelect={handleMyStrategySelect}
+                  disabled={running}
+                />
               </div>
             )}
             {importedYaml && (
               <div className="mt-2 px-2 py-1 bg-amber-100 text-amber-700 rounded text-xs">
-                YAML 전략 사용 중{strategyName ? ` · ${strategyName}` : ""}
+                {myStrategies.strategies.some((s) => s.yaml === importedYaml) ? "내 전략 사용 중" : "YAML 전략 사용 중"}
+                {strategyName ? ` · ${strategyName}` : ""}
               </div>
             )}
           </div>

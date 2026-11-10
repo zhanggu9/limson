@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Settings, Sparkles, BarChart3, Layers, SlidersHorizontal } from "lucide-react";
+import { Settings, Sparkles, BarChart3, SlidersHorizontal } from "lucide-react";
 import { LimsonMark } from "./LimsonMark";
 import { SettingsModal } from "@/components/settings";
 import { useAuth } from "@/hooks";
@@ -11,7 +11,6 @@ import { useAuth } from "@/hooks";
 const navItems = [
   { href: "/backtest", label: "백테스트", icon: BarChart3 },
   { href: "/backtest/optimize", label: "하이퍼옵트", icon: SlidersHorizontal },
-  { href: "/backtest/factor", label: "모멘텀 팩터", icon: Layers },
 ];
 
 export function Header() {

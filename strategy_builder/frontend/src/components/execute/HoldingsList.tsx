@@ -21,6 +21,8 @@ interface HoldingsListProps {
   balance?: Balance | null;
   onRefresh?: () => void;
   onCancelOrder?: (request: CancelOrderRequest) => Promise<void>;
+  /** 보유 종목의 매도 버튼을 눌렀을 때 (주문 확인 창을 연다). 없으면 버튼을 숨긴다 */
+  onSell?: (holding: Holding) => void;
   isLoading?: boolean;
 }
 
@@ -32,6 +34,7 @@ export function HoldingsList({
   balance,
   onRefresh,
   onCancelOrder,
+  onSell,
   isLoading,
 }: HoldingsListProps) {
   const [activeTab, setActiveTab] = useState<TabType>("holdings");
@@ -197,7 +200,7 @@ export function HoldingsList({
           ) : (
             <div className="divide-y divide-slate-200 dark:divide-slate-700">
               {holdings.map((holding) => (
-                <HoldingItem key={holding.stock_code} holding={holding} />
+                <HoldingItem key={holding.stock_code} holding={holding} onSell={onSell} />
               ))}
             </div>
           )}
@@ -232,9 +235,10 @@ export function HoldingsList({
 
 interface HoldingItemProps {
   holding: Holding;
+  onSell?: (holding: Holding) => void;
 }
 
-function HoldingItem({ holding }: HoldingItemProps) {
+function HoldingItem({ holding, onSell }: HoldingItemProps) {
   const isProfitable = holding.profit_loss >= 0;
 
   return (
@@ -273,6 +277,19 @@ function HoldingItem({ holding }: HoldingItemProps) {
           </span>
         </div>
       </div>
+
+      {/* 매도 버튼: 바로 주문하지 않고 주문 확인 창을 연다 */}
+      {onSell && (
+        <button
+          type="button"
+          onClick={() => onSell(holding)}
+          disabled={holding.quantity <= 0}
+          className="shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors focus-ring bg-red-50 hover:bg-red-100 dark:bg-red-900/20 dark:hover:bg-red-900/30 text-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
+          aria-label={`${holding.stock_name} 매도`}
+        >
+          매도
+        </button>
+      )}
     </div>
   );
 }

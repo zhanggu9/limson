@@ -24,7 +24,7 @@ import {
 } from "@/lib/api";
 import type { SignalResult } from "@/types/signal";
 import type { OrderRequest, OrderResult } from "@/types/order";
-import type { BuyableInfo } from "@/types/account";
+import type { BuyableInfo, Holding } from "@/types/account";
 
 export default function ExecutePage() {
   const { status: authStatus } = useAuth();
@@ -161,6 +161,17 @@ export default function ExecutePage() {
     }
   };
 
+  // 보유 종목의 매도 버튼: 시그널 없이 직접 매도 주문 확인 창을 연다
+  const handleHoldingSell = (holding: Holding) => {
+    handleSignalSelect({
+      code: holding.stock_code,
+      name: holding.stock_name,
+      action: "SELL",
+      strength: 1,
+      reason: "보유 종목 직접 매도",
+    });
+  };
+
   const handleOrderConfirm = async (request: OrderRequest) => {
     const result = await executeOrder(request);
 
@@ -289,6 +300,7 @@ export default function ExecutePage() {
               balance={balance}
               onRefresh={handleRefresh}
               onCancelOrder={handleCancelOrder}
+              onSell={authStatus.authenticated ? handleHoldingSell : undefined}
               isLoading={accountLoading}
             />
           </div>

@@ -296,7 +296,7 @@ export function OrderConfirmModal({
                 <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
                   수량
                 </label>
-                {isBuy && maxQuantity > 0 && (
+                {maxQuantity > 0 && (
                   <button
                     onClick={handleMaxQuantity}
                     className="text-xs text-primary hover:underline"
@@ -365,7 +365,7 @@ export function OrderConfirmModal({
               </button>
               <button
                 onClick={handleConfirm}
-                disabled={isLoading || (isBuy && !!buyable && estimatedAmount > buyable.amount)}
+                disabled={isLoading || (isBuy && !!buyable && estimatedAmount > buyable.amount) || (!isBuy && sellableQty != null && quantity > sellableQty)}
                 className={cn(
                   "flex-1 px-4 py-3 rounded-lg text-white font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed",
                   isBuy ? "bg-green-500 hover:bg-green-600" : "bg-red-500 hover:bg-red-600"

@@ -69,11 +69,11 @@ import threading
 
 _rate_lock = threading.Lock()
 
-# KIS REST 호출용 keep-alive 세션 (스레드마다 하나)과 타임아웃 (연결 5초, 응답 15초)
+# KIS REST 호출용 keep-alive 세션 (스레드마다 하나)과 타임아웃 (연결 5초, 응답 30초 — 모의투자 서버는 응답에 6~9초 걸릴 때가 있다)
 _http_local = threading.local()
-_HTTP_TIMEOUT = (5, 15)
+_HTTP_TIMEOUT = (5, 30)
 # 주문(POST)은 접수됐는데 응답만 늦는 경우를 실패로 오해하지 않게 더 오래 기다린다
-_HTTP_POST_TIMEOUT = (5, 30)
+_HTTP_POST_TIMEOUT = (5, 60)
 
 
 def _http_session() -> requests.Session:

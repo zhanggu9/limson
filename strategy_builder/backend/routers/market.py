@@ -26,7 +26,7 @@ def ensure_authenticated(env_dv: str = "vps") -> bool:
 
 
 @router.get("/orderbook/{stock_code}")
-async def get_orderbook(
+def get_orderbook(
     stock_code: str,
     env_dv: str = Query("demo", description="환경 구분 (real/demo/prod/vps)")
 ):
@@ -85,7 +85,7 @@ async def get_orderbook(
 
 
 @router.get("/price/{stock_code}")
-async def get_current_price(
+def get_current_price(
     stock_code: str,
     env_dv: str = Query("demo", description="환경 구분 (real/demo/prod/vps)")
 ):

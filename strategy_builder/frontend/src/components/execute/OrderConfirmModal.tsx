@@ -49,8 +49,9 @@ export function OrderConfirmModal({
 
   // Update limit price when current price loads (if no target_price)
   useEffect(() => {
+    // 현재가가 창이 뜬 뒤에 도착한다. 이미 가격을 골랐으면(호가 클릭·직접 입력) 덮어쓰지 않는다
     if (!signal.target_price && currentPrice > 0) {
-      setLimitPrice(currentPrice);
+      setLimitPrice((prev) => (prev > 0 ? prev : currentPrice));
     }
   }, [currentPrice, signal.target_price]);
 
@@ -365,7 +366,7 @@ export function OrderConfirmModal({
               </button>
               <button
                 onClick={handleConfirm}
-                disabled={isLoading || (isBuy && !!buyable && estimatedAmount > buyable.amount) || (!isBuy && sellableQty != null && quantity > sellableQty)}
+                disabled={isLoading || (orderType === "limit" && !(limitPrice > 0)) || (isBuy && !!buyable && estimatedAmount > buyable.amount) || (!isBuy && sellableQty != null && quantity > sellableQty)}
                 className={cn(
                   "flex-1 px-4 py-3 rounded-lg text-white font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed",
                   isBuy ? "bg-green-500 hover:bg-green-600" : "bg-red-500 hover:bg-red-600"

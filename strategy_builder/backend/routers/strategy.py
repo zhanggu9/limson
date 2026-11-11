@@ -105,13 +105,13 @@ class ExecuteResponse(BaseModel):
 # ============================================
 
 @router.get("")
-async def list_strategies():
+def list_strategies():
     """전략 목록 조회 - builder_state 포함 (SSoT)"""
     return {"strategies": StrategyRegistry.get_list()}
 
 
 @router.get("/custom")
-async def list_custom_strategies():
+def list_custom_strategies():
     """커스텀 전략 목록 조회"""
     import ast
     import re
@@ -167,7 +167,7 @@ async def list_custom_strategies():
 
 
 @router.get("/indicators")
-async def list_indicators():
+def list_indicators():
     """사용 가능한 지표 목록"""
     return {
         "indicators": [
@@ -192,7 +192,7 @@ async def list_indicators():
 
 
 @router.post("/execute", response_model=ExecuteResponse)
-async def execute_strategy(request: ExecuteRequest):
+def execute_strategy(request: ExecuteRequest):
     """전략 실행"""
     strategy_id = request.strategy_id
     stocks = request.stocks
@@ -304,7 +304,7 @@ async def execute_strategy(request: ExecuteRequest):
 
 
 @router.post("/build")
-async def build_strategy(request: BuildRequest):
+def build_strategy(request: BuildRequest):
     """커스텀 전략 생성"""
     try:
         name_snake = sanitize_strategy_name(request.name)
@@ -336,7 +336,7 @@ async def build_strategy(request: BuildRequest):
 
 
 @router.post("/preview")
-async def preview_strategy(request: BuildRequest):
+def preview_strategy(request: BuildRequest):
     """커스텀 전략 미리보기 (코드 생성만)"""
     try:
         name_snake = sanitize_strategy_name(request.name)
@@ -365,7 +365,7 @@ async def preview_strategy(request: BuildRequest):
 
 
 @router.post("/preview-code")
-async def preview_code_from_state(request: dict):
+def preview_code_from_state(request: dict):
     """BuilderState → Python 코드 미리보기"""
     try:
         builder_state = request.get("builder_state", {})

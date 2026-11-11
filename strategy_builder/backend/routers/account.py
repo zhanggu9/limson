@@ -59,7 +59,7 @@ class BalanceResponse(BaseModel):
 # ============================================
 
 @router.get("/info", response_model=AccountInfoResponse)
-async def get_account_info():
+def get_account_info():
     """
     계좌 기본 정보 조회
 
@@ -134,7 +134,7 @@ async def get_account_info():
 
 
 @router.get("/holdings", response_model=HoldingsResponse)
-async def get_holdings():
+def get_holdings():
     """
     보유 종목 목록 조회
 
@@ -204,7 +204,7 @@ async def get_holdings():
 
 
 @router.get("/balance", response_model=BalanceResponse)
-async def get_balance():
+def get_balance():
     """
     예수금/주문가능금액 조회
 
@@ -276,7 +276,7 @@ async def get_balance():
 
 
 @router.get("/buyable/{stock_code}")
-async def get_buyable(stock_code: str, price: int = 0):
+def get_buyable(stock_code: str, price: int = 0):
     """
     특정 종목 매수가능금액/수량 조회
 

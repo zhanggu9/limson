@@ -134,7 +134,7 @@ class OrderResponse(BaseModel):
 
 
 @router.post("/execute", response_model=OrderResponse)
-async def execute_order(request: OrderRequest):
+def execute_order(request: OrderRequest):
     """
     주문 실행
 
@@ -352,7 +352,7 @@ class CancelOrderResponse(BaseModel):
 
 
 @router.get("/account", response_model=AccountResponse)
-async def get_account_info():
+def get_account_info():
     """통합 계좌 정보 조회
     
     예수금과 보유종목 정보를 통합하여 반환합니다.
@@ -382,7 +382,7 @@ async def get_account_info():
 
 
 @router.post("/account/clear-cache")
-async def clear_account_cache():
+def clear_account_cache():
     """계좌 정보 캐시 삭제
     
     캐시를 삭제하여 다음 조회 시 최신 데이터를 가져옵니다.
@@ -399,7 +399,7 @@ async def clear_account_cache():
 
 
 @router.get("/pending", response_model=PendingOrdersResponse)
-async def get_pending_orders_api():
+def get_pending_orders_api():
     """미체결 주문 목록 조회
 
     오늘 접수된 미체결 주문 목록을 반환합니다.
@@ -503,7 +503,7 @@ async def get_pending_orders_api():
 
 
 @router.post("/cancel", response_model=CancelOrderResponse)
-async def cancel_order_api(request: CancelOrderRequest):
+def cancel_order_api(request: CancelOrderRequest):
     """주문 취소
     
     미체결 주문을 취소합니다.

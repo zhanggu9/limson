@@ -108,7 +108,8 @@ class OrderbookWebSocketManager:
         while self.running and stock_code in self.subscriptions:
             try:
                 # REST API로 호가 조회
-                orderbook = data_fetcher.get_orderbook(stock_code, env_dv="vps")
+                # 스레드에서 실행: KIS 응답을 기다리는 동안 다른 요청(주문 등)이 멈추지 않게 한다
+                orderbook = await asyncio.to_thread(data_fetcher.get_orderbook, stock_code, "vps")
 
                 if orderbook:
                     # 클라이언트에게 전달

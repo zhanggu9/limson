@@ -68,6 +68,21 @@ _smartSleep = 0.1
 import threading
 
 _rate_lock = threading.Lock()
+
+# KIS REST 호출용 keep-alive 세션 (스레드마다 하나)과 타임아웃 (연결 5초, 응답 15초)
+_http_local = threading.local()
+_HTTP_TIMEOUT = (5, 15)
+# 주문(POST)은 접수됐는데 응답만 늦는 경우를 실패로 오해하지 않게 더 오래 기다린다
+_HTTP_POST_TIMEOUT = (5, 30)
+
+
+def _http_session() -> requests.Session:
+    session = getattr(_http_local, "session", None)
+    if session is None:
+        session = requests.Session()
+        _http_local.session = session
+    return session
+
 _last_api_call_time = 0.0
 
 # 기본 헤더값 정의
@@ -487,11 +502,13 @@ def _url_fetch(
         print(f"<header>\n{headers}")
         print(f"<body>\n{params}")
 
+    # 연결 재사용: 호출마다 새로 TLS 연결을 맺지 않는다 (스레드별 세션). 응답이 없으면 무한정 기다리지 않는다.
+    session = _http_session()
     if postFlag:
         # if (hashFlag): set_order_hash_key(headers, params)
-        res = requests.post(url, headers=headers, data=json.dumps(params))
+        res = session.post(url, headers=headers, data=json.dumps(params), timeout=_HTTP_POST_TIMEOUT)
     else:
-        res = requests.get(url, headers=headers, params=params)
+        res = session.get(url, headers=headers, params=params, timeout=_HTTP_TIMEOUT)
 
     if res.status_code == 200:
         ar = APIResp(res)

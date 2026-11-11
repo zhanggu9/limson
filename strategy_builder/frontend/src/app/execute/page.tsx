@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Play, Loader2, Zap } from "lucide-react";
 import {
   StrategySelector,
@@ -119,45 +119,38 @@ export default function ExecutePage() {
     await execute(stocks);
   };
 
+  // 주문 창을 여는 순서 번호: 늦게 도착한 이전 종목의 현재가가 지금 창을 덮어쓰지 않게 한다
+  const orderRequestSeq = useRef(0);
+
   const handleSignalSelect = async (signal: SignalResult) => {
     setSelectedSignal(signal);
 
     // Only allow order for BUY/SELL signals
-    if (signal.action === "BUY" || signal.action === "SELL") {
-      // Fetch current price
-      try {
-        const priceResponse = await getCurrentPrice(signal.code, authStatus.mode);
-        if (priceResponse.status === "success" && priceResponse.data) {
-          setPriceData(priceResponse.data);
-        } else {
-          setPriceData(null);
-        }
+    if (signal.action !== "BUY" && signal.action !== "SELL") return;
 
-        // Fetch buyable amount for BUY signals; find holding quantity for SELL
-        if (signal.action === "BUY") {
-          const buyableResponse = await getBuyableAmount(
-            signal.code,
-            priceResponse.data?.price || 0
-          );
-          if (buyableResponse.status === "success" && buyableResponse.data) {
-            setBuyableInfo(buyableResponse.data);
-          } else {
-            setBuyableInfo(null);
-          }
-          setSellableQty(null);
-        } else {
-          setBuyableInfo(null);
-          const holding = holdings.find((h) => h.stock_code === signal.code);
-          setSellableQty(holding?.quantity ?? null);
-        }
+    const seq = ++orderRequestSeq.current;
+    const isCurrent = () => orderRequestSeq.current === seq;
 
-        setShowOrderModal(true);
-      } catch {
-        setPriceData(null);
-        setBuyableInfo(null);
-        setSellableQty(null);
-        setShowOrderModal(true);
+    // 창을 먼저 띄운다. 현재가·매수가능금액은 도착하는 대로 채운다 (KIS 응답을 기다리며 멈춰 있지 않게)
+    setPriceData(null);
+    setBuyableInfo(null);
+    const holding = holdings.find((h) => h.stock_code === signal.code);
+    setSellableQty(signal.action === "SELL" ? holding?.quantity ?? null : null);
+    setShowOrderModal(true);
+
+    try {
+      const priceResponse = await getCurrentPrice(signal.code, authStatus.mode);
+      if (!isCurrent()) return;
+      const price = priceResponse.status === "success" && priceResponse.data ? priceResponse.data : null;
+      setPriceData(price);
+
+      if (signal.action === "BUY") {
+        const buyableResponse = await getBuyableAmount(signal.code, price?.price || 0);
+        if (!isCurrent()) return;
+        setBuyableInfo(buyableResponse.status === "success" && buyableResponse.data ? buyableResponse.data : null);
       }
+    } catch {
+      // 현재가를 못 받아도 창은 그대로 둔다 (지정가를 직접 입력하거나 호가에서 고를 수 있다)
     }
   };
 
@@ -197,6 +190,7 @@ export default function ExecutePage() {
   };
 
   const handleOrderCancel = () => {
+    orderRequestSeq.current += 1;
     setShowOrderModal(false);
     setSelectedSignal(null);
     setBuyableInfo(null);

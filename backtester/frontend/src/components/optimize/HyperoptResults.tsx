@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import {
   CartesianGrid,
   Legend,
@@ -18,7 +18,7 @@ import { CheckCircle2, Download, Play, TriangleAlert } from "lucide-react";
 import { cn, formatPercent } from "@/lib/utils";
 import { formatClock } from "@/lib/backtestOptions";
 import { STOP_REASON_LABELS, formatParamValue, formatScore } from "@/lib/hyperopt";
-import type { HyperoptCandidate, HyperoptDoneEvent, HyperoptMetrics, HyperoptStartEvent } from "@/types";
+import type { HyperoptCandidate, HyperoptDoneEvent, HyperoptMetrics, HyperoptPeriodResult, HyperoptStartEvent } from "@/types";
 import type { TrialEvent } from "./HyperoptProgress";
 
 interface HyperoptResultsProps {
@@ -29,25 +29,19 @@ interface HyperoptResultsProps {
   onDownloadYaml: (candidate: HyperoptCandidate) => void;
 }
 
-function MetricCells({ metrics, score }: { metrics: HyperoptMetrics | null | undefined; score: number | null | undefined }) {
-  if (!metrics) {
-    return (
-      <>
-        <td className="py-2 pr-3 text-right text-slate-400" colSpan={4}>-</td>
-      </>
-    );
-  }
-  return (
-    <>
-      <td className="py-2 pr-3 text-right font-mono font-semibold">{formatScore(score)}</td>
-      <td className={cn("py-2 pr-3 text-right font-mono", metrics.total_return >= 0 ? "text-profit" : "text-loss")}>
-        {formatPercent(metrics.total_return)}
-      </td>
-      <td className="py-2 pr-3 text-right font-mono text-slate-600 dark:text-slate-400">{metrics.max_drawdown.toFixed(1)}%</td>
-      <td className="py-2 pr-3 text-right font-mono text-slate-600 dark:text-slate-400">{metrics.trades}</td>
-    </>
-  );
-}
+/** 성과 줄: 학습·검증 기간에 똑같이 쓴다 */
+const METRIC_ROWS: { key: string; label: string; render: (metrics: HyperoptMetrics, score: number | null | undefined) => React.ReactNode }[] = [
+  { key: "score", label: "점수", render: (_, score) => <span className="font-semibold">{formatScore(score)}</span> },
+  {
+    key: "return",
+    label: "수익률",
+    render: (metrics) => (
+      <span className={metrics.total_return >= 0 ? "text-profit" : "text-loss"}>{formatPercent(metrics.total_return)}</span>
+    ),
+  },
+  { key: "drawdown", label: "최대 낙폭", render: (metrics) => `${metrics.max_drawdown.toFixed(1)}%` },
+  { key: "trades", label: "매수 횟수", render: (metrics) => `${metrics.trades}회` },
+];
 
 /** 누적 수익률(%) 곡선: 각 구간의 첫 자산을 0%로 */
 function returnSeries(curve: Record<string, number> | null | undefined): [string, number][] {
@@ -99,6 +93,28 @@ export function HyperoptResults({ start, done, trials, onBacktest, onDownloadYam
 
   const noWinner = candidates.every((c) => !c.rank);
 
+  // 표의 줄: 탐색한 파라미터 순서대로 (목록에 없는 이름은 뒤에 붙인다)
+  const paramNames = useMemo(() => {
+    const names = specs.map((spec) => spec.name);
+    for (const candidate of candidates) {
+      for (const name of Object.keys(candidate.params)) if (!names.includes(name)) names.push(name);
+    }
+    return names.filter((name) => candidates.some((candidate) => name in candidate.params));
+  }, [specs, candidates]);
+
+  const periods: { key: string; title: string; range: string; pick: (c: HyperoptCandidate) => HyperoptPeriodResult | null }[] = [
+    { key: "train", title: "학습 기간 성과", range: `${start.train.start} ~ ${start.train.end}`, pick: (c) => c.train },
+    ...(start.valid
+      ? [{ key: "valid", title: "검증 기간 성과", range: `${start.valid.start} ~ ${start.valid.end}`, pick: (c: HyperoptCandidate) => c.valid }]
+      : []),
+  ];
+
+  const columnTone = (index: number) => (index === selected ? "bg-blue-50 dark:bg-blue-900/20" : "");
+  const stickyCell = "sticky left-0 z-10 bg-white dark:bg-[#1e293b] pr-3";
+  const groupHead = "pt-4 pb-1 text-left text-xs font-semibold text-slate-900 dark:text-white border-b border-slate-200 dark:border-slate-700";
+  const rowHead = "py-1.5 pl-2 text-left text-xs font-normal text-slate-600 dark:text-slate-300 border-b border-slate-100 dark:border-slate-800";
+  const valueCell = "py-1.5 px-3 text-center whitespace-nowrap border-b border-slate-100 dark:border-slate-800";
+
   return (
     <div className="space-y-4">
       <div className="card">
@@ -132,82 +148,149 @@ export function HyperoptResults({ start, done, trials, onBacktest, onDownloadYam
         <div className="card">
           <h3 className="font-semibold text-slate-900 dark:text-white mb-1">상위 조합과 기본값 비교</h3>
           <p className="text-xs text-slate-500 mb-3">
-            학습 기간 점수로 순위를 매긴 뒤, 학습에 안 쓴 검증 기간에서 다시 돌려 봤습니다. 검증에서도 기본값보다 좋아야 믿을 만한 값입니다.
+            세로 한 줄이 조합 하나입니다. 학습 기간 점수로 순위를 매긴 뒤, 학습에 안 쓴 검증 기간에서 다시 돌려 봤습니다. 검증에서도 기본값보다 좋아야 믿을 만한 값입니다.
+            {baseline && (
+              <>
+                {" "}
+                <span className="font-semibold text-kis-blue">파란 굵은 숫자</span>는 기본값과 다른 설정값입니다 (▲ 기본값보다 큼, ▼ 작음).
+              </>
+            )}
           </p>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm border-separate border-spacing-0">
               <thead>
-                <tr className="text-xs text-slate-500">
-                  <th className="pb-1 pr-3 text-left font-medium" rowSpan={2}>순위</th>
-                  <th className="pb-1 pr-3 text-left font-medium" rowSpan={2}>값</th>
-                  <th className="pb-1 pr-3 text-center font-medium border-b border-slate-200 dark:border-slate-700" colSpan={4}>학습 기간</th>
-                  <th className="pb-1 pr-3 text-center font-medium border-b border-slate-200 dark:border-slate-700" colSpan={4}>검증 기간</th>
-                  <th className="pb-1 text-left font-medium" rowSpan={2}></th>
-                </tr>
-                <tr className="text-xs text-slate-500 border-b border-slate-200 dark:border-slate-700">
-                  {["점수", "수익률", "낙폭", "매수", "점수", "수익률", "낙폭", "매수"].map((label, i) => (
-                    <th key={i} className="pb-2 pr-3 text-right font-medium whitespace-nowrap">{label}</th>
-                  ))}
+                <tr>
+                  <th className={cn(stickyCell, "w-56 min-w-[11rem] pb-2 text-left align-bottom text-xs font-medium text-slate-500")}>
+                    순위를 누르면 아래 수익률 그래프가 바뀝니다
+                  </th>
+                  {candidates.map((candidate, index) => {
+                    const better = verdict(candidate);
+                    return (
+                      <th key={`${candidate.label}-${candidate.number}`} className={cn("min-w-[8.5rem] p-0 align-top font-normal", columnTone(index), "rounded-t-lg")}>
+                        <button
+                          type="button"
+                          onClick={() => setSelected(index)}
+                          aria-pressed={index === selected}
+                          className="w-full px-3 pt-2 pb-2 text-center"
+                        >
+                          <span className={cn("block text-base font-bold", candidate.rank === 1 ? "text-emerald-600" : "text-slate-900 dark:text-white")}>
+                            {candidate.label}
+                          </span>
+                          {candidate.is_default && candidate.rank && <span className="block text-[11px] text-slate-400">= 기본값</span>}
+                          {better !== null && (
+                            <span
+                              className={cn(
+                                "mt-1 inline-block rounded-full px-2 py-0.5 text-[11px] font-medium",
+                                better
+                                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                                  : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+                              )}
+                            >
+                              {better ? "검증도 기본값보다 좋음" : "검증은 기본값보다 나쁨"}
+                            </span>
+                          )}
+                        </button>
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
-                {candidates.map((candidate, index) => {
-                  const better = verdict(candidate);
+                <tr>
+                  <th className={cn(stickyCell, groupHead)} scope="rowgroup">설정값</th>
+                  {candidates.map((candidate, index) => (
+                    <td key={candidate.number} className={cn(groupHead, columnTone(index))} />
+                  ))}
+                </tr>
+                {paramNames.map((name) => {
+                  const spec = specByName.get(name);
                   return (
-                    <tr
-                      key={`${candidate.label}-${candidate.number}`}
-                      onClick={() => setSelected(index)}
-                      className={cn(
-                        "border-b border-slate-100 dark:border-slate-800 last:border-0 cursor-pointer align-top",
-                        index === selected ? "bg-blue-50/60 dark:bg-blue-900/20" : "hover:bg-slate-50 dark:hover:bg-slate-800/50"
-                      )}
-                    >
-                      <td className="py-2 pr-3 whitespace-nowrap">
-                        <span className={cn("font-semibold", candidate.rank === 1 && "text-emerald-600")}>{candidate.label}</span>
-                        {candidate.is_default && candidate.rank && <span className="block text-[11px] text-slate-400">= 기본값</span>}
-                        {better !== null && (
-                          <span className={cn("block text-[11px]", better ? "text-emerald-600" : "text-amber-600")}>
-                            {better ? "검증도 기본값보다 좋음" : "검증은 기본값보다 나쁨"}
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-2 pr-3 text-xs text-slate-600 dark:text-slate-300 min-w-[12rem]">
-                        {Object.entries(candidate.params).map(([name, value]) => (
-                          <span key={name} className="inline-block mr-2 whitespace-nowrap">
-                            <span className="text-slate-400">{specByName.get(name)?.label ?? name}</span>{" "}
-                            <span className="font-mono">{formatParamValue(specByName.get(name), value)}</span>
-                          </span>
-                        ))}
-                      </td>
-                      <MetricCells metrics={candidate.train.metrics} score={candidate.train.score} />
-                      {start.valid ? (
-                        <MetricCells metrics={candidate.valid?.metrics} score={candidate.valid?.score} />
-                      ) : (
-                        <td className="py-2 pr-3 text-center text-xs text-slate-400" colSpan={4}>검증 안 함</td>
-                      )}
-                      <td className="py-2 whitespace-nowrap">
-                        <div className="flex flex-col gap-1">
-                          <button
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); onBacktest(candidate); }}
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-kis-blue text-white text-xs font-semibold hover:bg-kis-blue-dark"
-                          >
-                            <Play className="w-3 h-3" /> 이 값으로 백테스트
-                          </button>
-                          {candidate.yaml && (
-                            <button
-                              type="button"
-                              onClick={(e) => { e.stopPropagation(); onDownloadYaml(candidate); }}
-                              className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300 hover:border-kis-blue hover:text-kis-blue"
-                            >
-                              <Download className="w-3 h-3" /> YAML 받기
-                            </button>
-                          )}
-                        </div>
-                      </td>
+                    <tr key={name}>
+                      <th scope="row" className={cn(stickyCell, rowHead)}>{spec?.label ?? name}</th>
+                      {candidates.map((candidate, index) => {
+                        const value = candidate.params[name];
+                        const base = baseline?.params[name];
+                        const changed = value !== undefined && base !== undefined && candidate !== baseline && value !== base;
+                        return (
+                          <td key={candidate.number} className={cn(valueCell, columnTone(index))}>
+                            {value === undefined ? (
+                              <span className="text-slate-400">-</span>
+                            ) : (
+                              <span
+                                className={cn("font-mono", changed ? "font-bold text-kis-blue" : "text-slate-500 dark:text-slate-400")}
+                                title={changed ? `기본값 ${formatParamValue(spec, base as number)}에서 바뀜` : undefined}
+                              >
+                                {formatParamValue(spec, value)}
+                                {changed && <span className="ml-1 text-[10px]" aria-hidden="true">{value > (base as number) ? "▲" : "▼"}</span>}
+                              </span>
+                            )}
+                          </td>
+                        );
+                      })}
                     </tr>
                   );
                 })}
+
+                {periods.map((period) => (
+                  <Fragment key={period.key}>
+                    <tr>
+                      <th className={cn(stickyCell, groupHead)} scope="rowgroup">
+                        {period.title}
+                        <span className="ml-1 font-normal normal-case text-slate-400">{period.range}</span>
+                      </th>
+                      {candidates.map((candidate, index) => (
+                        <td key={candidate.number} className={cn(groupHead, columnTone(index))} />
+                      ))}
+                    </tr>
+                    {METRIC_ROWS.map((row) => (
+                      <tr key={row.key}>
+                        <th scope="row" className={cn(stickyCell, rowHead)}>
+                          {row.key === "score" ? `점수 (${start.objective.label})` : row.label}
+                        </th>
+                        {candidates.map((candidate, index) => {
+                          const result = period.pick(candidate);
+                          return (
+                            <td key={candidate.number} className={cn(valueCell, "font-mono", columnTone(index))}>
+                              {result?.metrics ? row.render(result.metrics, result.score) : <span className="text-slate-400">-</span>}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </Fragment>
+                ))}
+                {!start.valid && (
+                  <tr>
+                    <th className={cn(stickyCell, groupHead)} scope="rowgroup">검증 기간 성과</th>
+                    <td className={cn(groupHead, "text-center font-normal normal-case text-slate-400")} colSpan={candidates.length}>검증 안 함</td>
+                  </tr>
+                )}
+
+                <tr>
+                  <th className={cn(stickyCell, "pt-3")} />
+                  {candidates.map((candidate, index) => (
+                    <td key={candidate.number} className={cn("px-2 pt-3 pb-2 rounded-b-lg", columnTone(index))}>
+                      <div className="flex flex-col items-stretch gap-1">
+                        <button
+                          type="button"
+                          onClick={() => onBacktest(candidate)}
+                          className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded-md bg-kis-blue text-white text-xs font-semibold hover:bg-kis-blue-dark whitespace-nowrap"
+                        >
+                          <Play className="w-3 h-3" /> 이 값으로 백테스트
+                        </button>
+                        {candidate.yaml && (
+                          <button
+                            type="button"
+                            onClick={() => onDownloadYaml(candidate)}
+                            className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300 hover:border-kis-blue hover:text-kis-blue whitespace-nowrap"
+                          >
+                            <Download className="w-3 h-3" /> YAML 받기
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  ))}
+                </tr>
               </tbody>
             </table>
           </div>
@@ -218,7 +301,7 @@ export function HyperoptResults({ start, done, trials, onBacktest, onDownloadYam
         {chosen && chartData.length > 0 && (
           <div className="card">
             <h3 className="font-semibold text-slate-900 dark:text-white mb-1">{chosen.label} 누적 수익률</h3>
-            <p className="text-xs text-slate-500 mb-2">표에서 줄을 누르면 바뀝니다. 학습·검증은 각각 0%에서 다시 시작합니다.</p>
+            <p className="text-xs text-slate-500 mb-2">위 표에서 순위를 누르면 바뀝니다. 학습·검증은 각각 0%에서 다시 시작합니다.</p>
             <ResponsiveContainer width="100%" height={260}>
               <LineChart data={chartData} margin={{ top: 8, right: 12, bottom: 4, left: -8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />

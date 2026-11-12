@@ -152,7 +152,8 @@ export function HyperoptResults({ start, done, trials, onBacktest, onDownloadYam
             {baseline && (
               <>
                 {" "}
-                <span className="font-semibold text-kis-blue">파란 굵은 숫자</span>는 기본값과 다른 설정값입니다 (▲ 기본값보다 큼, ▼ 작음).
+                굵은 숫자는 기본값과 다른 설정값입니다 (<span className="font-semibold text-profit">▲ 빨강</span> 기본값보다 큼,{" "}
+                <span className="font-semibold text-loss">▼ 파랑</span> 작음).
               </>
             )}
           </p>
@@ -211,17 +212,18 @@ export function HyperoptResults({ start, done, trials, onBacktest, onDownloadYam
                         const value = candidate.params[name];
                         const base = baseline?.params[name];
                         const changed = value !== undefined && base !== undefined && candidate !== baseline && value !== base;
+                        const higher = changed && value > (base as number);
                         return (
                           <td key={candidate.number} className={cn(valueCell, columnTone(index))}>
                             {value === undefined ? (
                               <span className="text-slate-400">-</span>
                             ) : (
                               <span
-                                className={cn("font-mono", changed ? "font-bold text-kis-blue" : "text-slate-500 dark:text-slate-400")}
+                                className={cn("font-mono", !changed ? "text-slate-500 dark:text-slate-400" : higher ? "font-bold text-profit" : "font-bold text-loss")}
                                 title={changed ? `기본값 ${formatParamValue(spec, base as number)}에서 바뀜` : undefined}
                               >
                                 {formatParamValue(spec, value)}
-                                {changed && <span className="ml-1 text-[10px]" aria-hidden="true">{value > (base as number) ? "▲" : "▼"}</span>}
+                                {changed && <span className="ml-1 text-[10px]" aria-hidden="true">{higher ? "▲" : "▼"}</span>}
                               </span>
                             )}
                           </td>

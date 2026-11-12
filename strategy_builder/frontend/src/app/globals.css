@@ -390,3 +390,26 @@ input[type="range"].range-blue::-webkit-slider-thumb {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* 소개 슬라이드 (/slides): claude.ai 슬라이드 형식을 그대로 그리기 위한 기본값 */
+.limson-deck > section {
+  position: relative;
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  font-family: var(--font-noto-sans-kr), "Noto Sans KR", Arial, sans-serif !important;
+  text-align: left;
+}
+.limson-deck h1 { font-size: 96px; font-weight: 600; line-height: 1.1; }
+.limson-deck h2 { font-size: 64px; font-weight: 600; line-height: 1.15; }
+.limson-deck h3 { font-size: 44px; font-weight: 600; line-height: 1.2; }
+.limson-deck p { font-size: 32px; font-weight: 400; line-height: 1.4; }
+.limson-deck h1, .limson-deck h2, .limson-deck h3, .limson-deck p { margin: 0; }
+.limson-deck div:not([style*="display:"]) { display: flex; flex-direction: column; }
+.limson-deck svg { flex-shrink: 0; }
+.limson-deck x-shape { display: block; flex-shrink: 0; }
+.limson-deck x-shape[kind="ellipse"] { border-radius: 50%; }
+.limson-deck x-shape[kind="arrow-right"] { clip-path: polygon(0 30%, 60% 30%, 60% 10%, 100% 50%, 60% 90%, 60% 70%, 0 70%); }
+.limson-deck x-shape[kind="arrow-left"] { clip-path: polygon(100% 30%, 40% 30%, 40% 10%, 0 50%, 40% 90%, 40% 70%, 100% 70%); }
+.limson-deck x-shape[kind="arrow-up"] { clip-path: polygon(30% 100%, 30% 40%, 10% 40%, 50% 0, 90% 40%, 70% 40%, 70% 100%); }
+.limson-deck x-shape[kind="arrow-down"] { clip-path: polygon(30% 0, 30% 60%, 10% 60%, 50% 100%, 90% 60%, 70% 60%, 70% 0); }

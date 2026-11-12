@@ -37,6 +37,7 @@
 - nginx 단일 포트 + Basic 인증. 인증 정보·DB URL·SSH 키는 커밋하지 않는다 (`kis_devlp.yaml`에 실제 키 넣지 말 것).
 
 ## 운영 메모
+- 소개 슬라이드(`/slides`, 전략 빌더 앱)는 claude.ai 슬라이드 「LIMSON 발표」를 옮겨 온 사본이다 (`strategy_builder/frontend/src/data/limsonDeck.json`: 장마다 `<section>` HTML + 발표자 설명). 원본을 고쳐도 자동으로 바뀌지 않으니 다시 옮겨야 한다. 옮길 때 `<x-icon>`은 lucide SVG로 바꾸고, `<x-shape>`·글자 기본값은 `globals.css`의 `.limson-deck`이 그린다. 웹 사본에서만 「4개씩 동시에」를 「10개씩 동시에」로 고쳤다.
 - 빌더의 「내 전략」은 서버가 아니라 브라우저 localStorage(`kis2_custom_strategies`)에 있다. 백테스터는 같은 주소(nginx 단일 포트)일 때만 그걸 읽어 「내 전략」으로 보여 준다 → 로컬 개발(3000/3001 포트가 다름)에서는 비어 보인다. 저장할 때 빌더가 `yaml` 필드를 같이 넣고, 빌더를 열 때마다 모든 전략의 YAML을 다시 만든다.
 - 백테스트마다 `backtester/.lean-workspace/projects/bt_*` 폴더가 남고 자동 삭제되지 않음. 컨테이너가 root로 쓰므로 root 소유 → 주기적 정리 필요.
 - 서버 실행 사용자는 `docker` 그룹 소속이어야 함 (`server_setup.sh`가 처리).

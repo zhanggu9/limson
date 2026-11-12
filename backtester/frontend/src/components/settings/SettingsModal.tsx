@@ -1,10 +1,13 @@
 "use client";
 import { useState, useEffect } from "react";
-import { X, RefreshCw, Database, Shield, Clock } from "lucide-react";
+import { X, RefreshCw, Database, Shield, Clock, Presentation } from "lucide-react";
 import { useAuth } from "@/hooks";
 import { getMasterStatus, collectMasterFiles } from "@/lib/api/symbols";
 import type { MasterStatus } from "@/types/symbols";
 import type { AuthMode } from "@/types/auth";
+
+// 소개 슬라이드는 전략 빌더 앱의 /slides 에 있다 (전략 빌더 주소 …/builder 옆)
+const SLIDES_URL = (process.env.NEXT_PUBLIC_STRATEGY_BUILDER_URL || "http://localhost:3000/builder").replace(/\/builder\/?$/, "") + "/slides";
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -87,7 +90,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         className="absolute inset-0 bg-black/50 backdrop-blur-sm"
         onClick={onClose}
       />
-      <div className="relative w-full max-w-md mx-4 bg-white dark:bg-slate-900 rounded-xl shadow-2xl">
+      <div className="relative w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto bg-white dark:bg-slate-900 rounded-xl shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-700">
           <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
@@ -309,6 +312,23 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                   "마스터파일 수집"
                 )}
               </button>
+            </div>
+          </section>
+
+          {/* LIMSON 소개 슬라이드 */}
+          <section className="space-y-3">
+            <div className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <Presentation className="w-4 h-4" />
+              LIMSON 소개
+            </div>
+            <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg space-y-3">
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                LIMSON이 무엇인지, 클라우드와 내 PC가 어떻게 연결되는지, 하이퍼옵트가 값을 어떻게 찾는지 슬라이드와 설명으로 볼 수 있습니다.
+              </p>
+              <a href={SLIDES_URL} className="flex w-full items-center justify-center gap-2 py-2 px-4 rounded-lg text-sm font-medium bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors">
+                <Presentation className="w-4 h-4" aria-hidden="true" />
+                소개 슬라이드 보기
+              </a>
             </div>
           </section>
         </div>

@@ -67,8 +67,8 @@ from kis_backtest.optimize.space import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# 동시에 돌릴 LEAN 컨테이너 수 상한 (로컬 PC 6코어 기준 4)
-MAX_CONCURRENCY = int(os.getenv("HYPEROPT_MAX_CONCURRENCY", "4"))
+# 동시에 돌릴 LEAN 컨테이너 수 상한 (로컬 PC 14코어·메모리 15GB 기준 12, 실측: 12개 동시에 약 5GB 사용)
+MAX_CONCURRENCY = int(os.getenv("HYPEROPT_MAX_CONCURRENCY", "12"))
 # 한 번에 탐색할 수 있는 파라미터 수
 MAX_SEARCH_PARAMS = 12
 # 학습·검증 구간의 최소 평일 수
@@ -125,9 +125,15 @@ def estimate_run_seconds(symbol_count: int, start: date, end: date, resolution: 
 
 
 def parallel_speedup(concurrency: int, run_seconds: float) -> float:
-    """동시 실행으로 빨라지는 배수 (실측: 일봉 4개 동시 약 1.7배, 긴 분봉은 CPU를 더 나눠 쓴다)."""
-    gain = 0.25 if run_seconds < 15 else 0.6
-    return 1 + gain * (max(concurrency, 1) - 1)
+    """동시 실행으로 빨라지는 배수.
+
+    실측(14코어): 긴 분봉은 12개까지 거의 개수만큼 빨라진다 (4개 303초 → 12개 106초).
+    짧은 일봉은 기동 시간이 대부분이라 4개를 넘으면 조금씩만 빨라진다 (4개 116초 → 10개 88초).
+    """
+    count = max(concurrency, 1)
+    if run_seconds < 15:
+        return 1 + 0.25 * (min(count, 4) - 1) + 0.1 * max(count - 4, 0)
+    return 1 + 0.6 * (count - 1)
 
 
 def _codegen_config(request: HyperoptRequest) -> CodeGenConfig:

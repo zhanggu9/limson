@@ -116,8 +116,9 @@ export function formatScore(score: number | null | undefined, digits = 3): strin
 
 /** 동시 실행으로 빨라지는 배수 (서버 parallel_speedup 과 같은 식) */
 function parallelSpeedup(concurrency: number, perRun: number): number {
-  const gain = perRun < 15 ? 0.25 : 0.6;
-  return 1 + gain * (Math.max(concurrency, 1) - 1);
+  const count = Math.max(concurrency, 1);
+  if (perRun < 15) return 1 + 0.25 * (Math.min(count, 4) - 1) + 0.1 * Math.max(count - 4, 0);
+  return 1 + 0.6 * (count - 1);
 }
 
 /** 하이퍼옵트 예상 시간 (서버 estimate_run_seconds / estimate_total_seconds 와 같은 식) */

@@ -72,6 +72,8 @@ const VALIDATION_OPTIONS = [
 ];
 
 const TRIAL_PRESETS = [30, 100, 200];
+// 동시 실행 개수 선택지 (서버 상한 max_concurrency 이하만 보여 준다)
+const CONCURRENCY_CHOICES = [1, 2, 4, 6, 8, 10, 12];
 
 // 마지막 결과를 브라우저 탭에 잠깐 보관 (백테스트 화면에 다녀와도 그대로 보이게)
 const LAST_RUN_KEY = "limson.hyperopt.last";
@@ -168,7 +170,7 @@ export default function HyperoptPage() {
   const [nTrials, setNTrials] = useState(100);
   const [minTrades, setMinTrades] = useState(3);
   const [validationRatio, setValidationRatio] = useState(0.3);
-  const [concurrency, setConcurrency] = useState(4);
+  const [concurrency, setConcurrency] = useState(10);
   const [maxConcurrency, setMaxConcurrency] = useState(4);
   const [timeBudget, setTimeBudget] = useState(60);
   const [seed, setSeed] = useState("");
@@ -947,8 +949,8 @@ export default function HyperoptPage() {
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="text-xs text-slate-500 mb-1 block">동시 실행</label>
-              <div role="radiogroup" aria-label="동시 실행 개수" className="grid grid-cols-4 gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-800">
-                {Array.from({ length: Math.max(1, Math.min(maxConcurrency, 4)) }, (_, i) => i + 1).map((n) => (
+              <div role="radiogroup" aria-label="동시 실행 개수" className="flex gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-800">
+                {CONCURRENCY_CHOICES.filter((n) => n <= Math.max(1, maxConcurrency)).map((n) => (
                   <button
                     key={n}
                     type="button"
@@ -957,7 +959,7 @@ export default function HyperoptPage() {
                     disabled={running}
                     onClick={() => setConcurrency(n)}
                     className={cn(
-                      "py-1 rounded-md text-xs font-medium",
+                      "flex-1 py-1 rounded-md text-xs font-medium",
                       concurrency === n ? "bg-white dark:bg-slate-700 text-kis-blue shadow-sm" : "text-slate-500"
                     )}
                   >

@@ -49,7 +49,7 @@ class HyperoptRequest(HyperoptSpaceRequest):
     n_trials: int = Field(default=100, ge=5, le=500)
     min_trades: int = Field(default=3, ge=0, le=100_000)
     validation_ratio: float = Field(default=0.3, ge=0, le=0.5, description="뒤쪽 기간 중 검증에 쓸 비율 (0이면 검증 안 함)")
-    concurrency: int = Field(default=4, ge=1, le=8)
+    concurrency: int = Field(default=4, ge=1, le=16)
     time_budget_minutes: int = Field(default=60, ge=1, le=240)
     seed: Optional[int] = Field(default=None, ge=0, le=2**31 - 1)
 
